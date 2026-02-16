@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Feb 13, 2026 at 09:56 AM
+-- Generation Time: Feb 16, 2026 at 02:44 PM
 -- Server version: 10.9.8-MariaDB
 -- PHP Version: 7.4.33
 
@@ -209,15 +209,15 @@ CREATE TABLE `pp_device` (
   `id` int(11) NOT NULL,
   `d_id` varchar(40) NOT NULL,
   `device_id` varchar(15) NOT NULL,
-  `tk_id` varchar(25) NOT NULL DEFAULT '--',
   `otp` varchar(15) NOT NULL,
   `name` text NOT NULL DEFAULT '--',
   `model` text NOT NULL DEFAULT '--',
   `android_level` text NOT NULL DEFAULT '--',
-  `app_version` text NOT NULL,
+  `app_version` text NOT NULL DEFAULT '--',
   `status` enum('processing','used','','') NOT NULL DEFAULT 'processing',
   `created_date` varchar(20) NOT NULL,
-  `updated_date` varchar(20) NOT NULL
+  `updated_date` varchar(20) NOT NULL,
+  `last_sync` varchar(20) NOT NULL DEFAULT '--'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -574,7 +574,6 @@ ALTER TABLE `pp_device`
   ADD KEY `created_date` (`created_date`,`updated_date`),
   ADD KEY `a_id` (`d_id`),
   ADD KEY `otp` (`otp`),
-  ADD KEY `tk_id` (`tk_id`),
   ADD KEY `status` (`status`);
 
 --
