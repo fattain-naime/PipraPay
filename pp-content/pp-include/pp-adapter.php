@@ -107,12 +107,6 @@
             'required' => 'Enabled',
             'current'  => extension_loaded('bcmath') ? 'Enabled' : 'Disabled',
             'check'    => extension_loaded('bcmath')
-        ],
-        [
-            'name'     => 'ioncube loader',
-            'required' => 'Enabled',
-            'current'  => extension_loaded('ionCube Loader') ? 'Enabled' : 'Disabled',
-            'check'    => extension_loaded('ionCube Loader')
         ]
     ];
 
@@ -232,12 +226,21 @@
     $piprapay_current_version = [
         'version_name' => 'v1.0.0-beta.1',
         'version_code' => '1.0.0',
-        'version_hash' => '1234124124123412412421',
+        'version_hash' => '6b6f7c62e34e3680398387720dbd44a036d1a574860d5f90a3bd5d9b6280bea1
+c9515853f1fbf61175dd3dbce6eb011e4cf29fc43949ed4b562f6421b88c8773
+c0dc07a71b29a9da279310f2247affb16089334cc3da60fa0b4b4f06f78594cb
+29668acba982d4706c0b8827b5cb9c85ecd24ba899f62116a5dcb7dea121d451
+83bfac44e905e37a7ff65776b378988011d407fe308d57af204d1d88093ba733
+3ef016b79259331703a1a3db6d1b886e38226d9d619673c81ab13d6ee53bdd99
+46e4e9bd74065d7e87ad545cba46957bc5d695290c6b2a4786710de8785bbb48
+46cc094590e12b359b3f8c429b75c7771164d64b4ee77c3783b304a6757f1dcb
+aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
+09a03d6d70021d1c0dd64cefd6e400b18d0e43d00d821b8f52e2e9370908779e',
         'version_channel' => 'beta'
     ];
 
-    $piprapay_favicon= '';
-    $piprapay_logo_light = '';
+    $piprapay_favicon= 'https://piprapay.com/assets/images/favicon.png';
+    $piprapay_logo_light = 'https://cdn.piprapay.com/media/logo.png';
 
     $directory = (pp_site_url('fulldomain') == 'http://localhost') ? 'piprapay-panel/' : '';
     $site_url = pp_site_url('fulldomain').'/'.$directory;
@@ -9816,4 +9819,5 @@
             echo json_encode(['status' => 'false', 'message' => 'Invalid request']);
         }
         exit;
+
     }
