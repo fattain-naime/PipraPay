@@ -26,7 +26,7 @@ Official Open-Source Repository:
 - API docs: https://piprapay.readme.io
 - Explore PipraPay Demo: https://demo.piprapay.com/admin/login  
   - username: `demo`  
-  - password: `123456`
+  - password: `12345678`
 
 ---
 
