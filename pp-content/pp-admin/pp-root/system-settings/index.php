@@ -8,15 +8,6 @@
         http_response_code(403);
         exit('Access denied. You need permission to perform this action. Please contact the admin.');
     }
-
-    if (!isset($ASCBVS_license_status) || !$ASCBVS_license_status) {
-?>
-        <script>
-            load_content('License','<?php echo $site_url.$path_admin ?>/license','nav-item-license');
-        </script>
-<?php
-        exit();
-    }
 ?>
 
 <div class="page-header d-print-none" aria-label="Page header">
@@ -105,4 +96,5 @@
             </div>
         </div>
     </div>
+
 </div>
