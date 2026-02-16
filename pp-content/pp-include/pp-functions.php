@@ -650,7 +650,7 @@
                 'name'     => 'bKash',
                 'currency' => 'BDT',
                 'balance_verify' => 'true',
-                'senders'  => ['bkash', "8809601004674","+8809601004674","09601004674"],
+                'senders'  => ['bkash'],
             ],
             'nagad' => [
                 'name'     => 'Nagad',
@@ -3422,3 +3422,4 @@
             $this->offset = null;
         }
     }
+
