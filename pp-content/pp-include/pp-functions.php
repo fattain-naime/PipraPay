@@ -65,13 +65,13 @@
     function getAuthorizationHeader() {
         if (function_exists('getallheaders')) {
             $headers = getallheaders();
-            if (isset($headers['MHS-BILLPAX-API-KEY'])) {
-                return trim($headers['MHS-BILLPAX-API-KEY']);
+            if (isset($headers['MHS-PIPRAPAY-API-KEY'])) {
+                return trim($headers['MHS-PIPRAPAY-API-KEY']);
             }
         }
     
         foreach ($_SERVER as $key => $value) {
-            if (stripos($key, 'HTTP_MHS_BILLPAX_API_KEY') !== false) {
+            if (stripos($key, 'HTTP_MHS_PIPRAPAY_API_KEY') !== false) {
                 return trim($value);
             }
         }
@@ -1668,10 +1668,10 @@
         return $site_url.'ipn/'.$gatewayid;
     }
 
-    function pp_check_transaction($bpid = ''){
+    function pp_check_transaction($ppid = ''){
         global $db_prefix;
 
-        $params = [ ':ref' => $bpid ];
+        $params = [ ':ref' => $ppid ];
 
         $response_transaciton = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref','* FROM',$params),true);
 
