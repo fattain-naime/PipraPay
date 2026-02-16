@@ -1,17 +1,8 @@
 <?php
-if (!defined('BillPax_INIT')) {
+if (!defined('PipraPay_INIT')) {
     http_response_code(403);
     exit('Direct access not allowed');
 }
-
-    if (!isset($ASCBVS_license_status) || !$ASCBVS_license_status) {
-?>
-        <script>
-            load_content('License','<?php echo $site_url.$path_admin ?>/license','nav-item-license');
-        </script>
-<?php
-        exit();
-    }
 
     if (!canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'invoice', $global_user_response['response'][0]['role'])) {
         http_response_code(403);
@@ -630,4 +621,5 @@ if (!defined('BillPax_INIT')) {
             show_action_confirmation_tab(btnClass, 'Delete Invoice', 'Delete', 'btn-danger');
         }
     }
+
 </script>
