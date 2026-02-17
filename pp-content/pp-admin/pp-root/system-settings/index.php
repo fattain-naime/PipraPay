@@ -92,6 +92,27 @@
                             </div>
                         </div>
                     </div>
+
+                    <div class="col-md-4 <?= hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'system_settings', 'manage_import', $global_user_response['response'][0]['role']) ? '' : 'd-none' ?>" onclick="load_content('System Settings','<?php echo $site_url.$path_admin ?>/system-settings/import','nav-item-system-settings')"  style="cursor: pointer;">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <div class="d-flex align-items-center">
+                                    <!-- Icon -->
+                                    <div class="bg-primary bg-opacity-10 text-primary rounded-3 d-flex align-items-center justify-content-center flex-shrink-0" style="width:50px;height:50px;">
+                                        <svg xmlns="http://www.w3.org/2000/svg" style="width: 24px; height: 24px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-upload"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2" /><path d="M7 9l5 -5l5 5" /><path d="M12 4l0 12" /></svg>
+                                    </div>
+
+                                    <!-- Text -->
+                                    <div class="ms-3">
+                                        <h5 class="card-title m-0 mb-1 fw-medium text-primary" style=" margin-top: -3px !important; ">
+                                            Import
+                                        </h5>
+                                        <p class="m-0 text-dark">Import themes, add-ons, payment gateways, or any other modules</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

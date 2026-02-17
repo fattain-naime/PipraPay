@@ -621,5 +621,4 @@ if (!defined('PipraPay_INIT')) {
             show_action_confirmation_tab(btnClass, 'Delete Invoice', 'Delete', 'btn-danger');
         }
     }
-
 </script>

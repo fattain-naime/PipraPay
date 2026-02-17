@@ -1,39 +1,17 @@
 <?php
-    if (!defined('PipraPay_INIT')) {
-        http_response_code(403);
-        exit('Direct access not allowed');
-    }
+if (!defined('PipraPay_INIT')) {
+    http_response_code(403);
+    exit('Direct access not allowed');
+}
 
-    if (!canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'brands', $global_user_response['response'][0]['role'])) {
-        http_response_code(403);
-        exit('Access denied. You need permission to perform this action. Please contact the admin.');
-    }
-
-    if (!hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'brands', 'edit', $global_user_response['response'][0]['role'])) {
+    if (!canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'system_settings', $global_user_response['response'][0]['role'])) {
         http_response_code(403);
         exit('Access denied. You need permission to perform this action. Please contact the admin.');
     }
 
-    $params = json_decode($_POST['params'] ?? '{}', true);
-
-    $b_id = getParam($params, 'b_id');
-
-    if ($b_id === null) {
+    if (!hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'system_settings', 'manage_import', $global_user_response['response'][0]['role'])) {
         http_response_code(403);
-        exit('Invalid brand id');
-    }else{
-        $b_id = escape_string($b_id);
-
-        $response_brands = json_decode(getData($db_prefix.'brands','WHERE brand_id = "'.$b_id.'"'),true);
-        if($response_brands['status'] == true){
-            if($response_brands['response'][0]['id'] == 1){
-                http_response_code(403);
-                exit("You can't edit default brand");
-            }
-        }else{
-            http_response_code(403);
-            exit('Direct access not allowed');
-        }
+        exit('Access denied. You need permission to perform this action. Please contact the admin.');
     }
 ?>
 
@@ -44,11 +22,11 @@
             <!-- Page pre-title -->
                 <div class="page-pretitle">
                     <ol class="breadcrumb breadcrumb-arrow mb-0">
-                        <li class="breadcrumb-item"><a href="javascript:void(0)" onclick="load_content('All Brands','<?php echo $site_url.$path_admin ?>/brands','nav-item-brands')">All Brands</a></li>
-                        <li class="breadcrumb-item active"><a href="javascript:void(0)">Edit Brand</a></li>
+                        <li class="breadcrumb-item"><a href="javascript:void(0)" onclick="load_content('System Settings','<?php echo $site_url.$path_admin ?>/system-settings','nav-item-system-settings')">System Settings</a></li>
+                        <li class="breadcrumb-item active"><a href="javascript:void(0)">Import</a></li>
                     </ol>
                 </div>
-                <h2 class="page-title">Edit Brand</h2>
+                <h2 class="page-title">Import</h2>
             </div>
         </div>
     </div>
@@ -57,32 +35,38 @@
 <div class="page-body">
     <div class="container-xl">
         <div class="row g-gs">
-            <div class="col-12 col-xxl-12">
-                <form class="form-edit-brand">
-                    <input type="hidden" name="action" value="edit-brand">
-                    <input type="hidden" name="b_id" value="<?= $b_id; ?>">
-                    <input type="hidden" name="csrf_token" value="<?= $csrf_token; ?>">
+            <div class="col-12 col-xxl-4">
+                <h2 class="card-title m-0 mb-1">Import</h2>
+                <p>Import themes, add-ons, payment gateways, or any other modules</p>
+            </div>
+            <div class="col-12 col-xxl-8">
+                <div class="card p-2">
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-lg-12">
+                                <form action="" class="form-general-setting" enctype="multipart/form-data">
+                                    <input type="hidden" name="action" value="system-settings-import">
+                                    <input type="hidden" name="csrf_token" value="<?= $csrf_token; ?>">
 
-                    <div class="card p-2">
-                        <div class="card-body">
-                            <div class="row g-3">
-                                <div class="col-lg-12">
-                                    <div class="form-group">
-                                        <label for="brand-name" class="form-label">Brand Name<span
-                                                class="text-danger">*</span></label>
-                                        <div class="form-control-wrap">
-                                            <input type="text" class="form-control" id="brand-name" name="brand-name" placeholder="Brand Name" value="<?php echo $response_brands['response'][0]['identify_name']?>" required>
+                                    <label class="form-label">Upload ZIP File</label>
+
+                                    <div class="form-control-wrap mb-2">
+                                        <div class="input-group">
+                                            <input type="file" name="zip_file" class="form-control" id="zip_file" accept=".zip" required>
                                         </div>
                                     </div>
-                                </div>
+
+                                    <small class="form-hint">
+                                        Select a ZIP file from your device and upload it.
+                                    </small>
+
+
+                                    <button class="btn btn-primary btn-save-changes mt-3" type="submit">Upload</button>
+                                </form>
                             </div>
                         </div>
                     </div>
-
-                    <div class="text-end pt-3">
-                        <button class="btn btn-primary btn-edit-brand" type="submit">Save Changes</button>
-                    </div>
-                </form>
+                </div>
             </div>
         </div>
     </div>
@@ -90,36 +74,39 @@
 
 
 <script data-cfasync="false">
-    $('.form-edit-brand').submit(function (e) {
+    $('.form-general-setting').submit(function (e) {
         e.preventDefault();
 
-        var btnClass = 'btn-edit-brand';
+        let formData = new FormData(this);
+        
+        var btnClass = 'btn-save-changes';
 
         var btn = document.querySelector('.'+btnClass).innerHTML;
 
         document.querySelector('.'+btnClass).innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>';
 
-        var formData = $(this).serialize();
-
         $.ajax({
             type: 'POST',
-            url: '<?php echo $site_url ?>dashboard',
+            url: '<?php echo $site_url.$path_admin ?>/dashboard',
             data: formData,
+            contentType: false, // IMPORTANT
+            processData: false, // IMPORTANT
             dataType: 'json',
             success: function (response) {
                 closeAllBootstrapModals();
 
                 document.querySelector('.'+btnClass).innerHTML = btn;
 
-                document.querySelectorAll('input[name="csrf_token"]').forEach(i => {
-                    i.value = response.csrf_token;
+                document.querySelectorAll('input[name="csrf_token"]').forEach(input => {
+                    input.value = response.csrf_token;
                 });
-
                 document.querySelectorAll('input[name="csrf_token_default"]').forEach(input => {
                     input.value = response.csrf_token;
                 });
 
                 if (response.status === 'true') {
+                    document.querySelector(".form-general-setting").reset();
+
                     createToast({
                         title: response.title,
                         description: response.message,
@@ -127,8 +114,6 @@
                         timeout: 6000,
                         top: 70
                     });
-
-                    location.reload();
                 } else {
                     createToast({
                         title: response.title,
