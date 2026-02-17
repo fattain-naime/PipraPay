@@ -639,6 +639,12 @@
                         }
                     },
                     error: function (xhr, status, error) {
+                        console.log('AJAX Error:');
+                        console.log('Status:', status);
+                        console.log('Error:', error);            
+                        console.log('Response Text:', xhr.responseText); 
+                        console.log('XHR Object:', xhr);          
+
                         btn.text('Check & Import');
 
                         createToast({

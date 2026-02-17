@@ -65,13 +65,13 @@
     function getAuthorizationHeader() {
         if (function_exists('getallheaders')) {
             $headers = getallheaders();
-            if (isset($headers['MHS-BILLPAX-API-KEY'])) {
-                return trim($headers['MHS-BILLPAX-API-KEY']);
+            if (isset($headers['MHS-PIPRAPAY-API-KEY'])) {
+                return trim($headers['MHS-PIPRAPAY-API-KEY']);
             }
         }
     
         foreach ($_SERVER as $key => $value) {
-            if (stripos($key, 'HTTP_MHS_BILLPAX_API_KEY') !== false) {
+            if (stripos($key, 'HTTP_MHS_PIPRAPAY_API_KEY') !== false) {
                 return trim($value);
             }
         }
@@ -650,7 +650,7 @@
                 'name'     => 'bKash',
                 'currency' => 'BDT',
                 'balance_verify' => 'true',
-                'senders'  => ['bkash', "8809601004674","+8809601004674","09601004674"],
+                'senders'  => ['bkash'],
             ],
             'nagad' => [
                 'name'     => 'Nagad',
@@ -1222,7 +1222,8 @@
                 'system_settings' => [
                     'manage_general' => true,
                     'manage_cron' => true,
-                    'manage_update'   => true
+                    'manage_update'   => true,
+                    'manage_import'   => true
                 ],
             ],
             'pages' => [
@@ -1668,10 +1669,10 @@
         return $site_url.'ipn/'.$gatewayid;
     }
 
-    function pp_check_transaction($bpid = ''){
+    function pp_check_transaction($ppid = ''){
         global $db_prefix;
 
-        $params = [ ':ref' => $bpid ];
+        $params = [ ':ref' => $ppid ];
 
         $response_transaciton = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref','* FROM',$params),true);
 
@@ -3422,3 +3423,4 @@
             $this->offset = null;
         }
     }
+

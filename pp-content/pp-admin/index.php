@@ -359,7 +359,7 @@
 
               <!-- Administration Heading -->
               <li class="card-title pt-3">Administration</li>
-
+              
               <!-- Addons -->
               <li class="nav-item nav-item-addons <?= canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'addons', $global_user_response['response'][0]['role']) ? '' : 'd-none' ?>" 
                   onclick="load_content('Addons','<?php echo $site_url.$path_admin ?>/addons','nav-item-addons')">

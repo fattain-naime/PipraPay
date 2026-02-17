@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Feb 13, 2026 at 09:56 AM
+-- Generation Time: Feb 16, 2026 at 02:44 PM
 -- Server version: 10.9.8-MariaDB
 -- PHP Version: 7.4.33
 
@@ -18,7 +18,7 @@ SET time_zone = "+00:00";
 /*!40101 SET NAMES utf8mb4 */;
 
 --
--- Database: `billpax`
+-- Database: `piprapay`
 --
 
 -- --------------------------------------------------------
@@ -32,7 +32,7 @@ CREATE TABLE `pp_addon` (
   `addon_id` varchar(15) NOT NULL,
   `slug` varchar(40) NOT NULL DEFAULT '--',
   `name` text NOT NULL DEFAULT '--',
-  `status` enum('active','inactive','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -67,9 +67,9 @@ CREATE TABLE `pp_admin` (
   `password` text NOT NULL,
   `temp_password` text NOT NULL DEFAULT '--',
   `reset_limit` text NOT NULL DEFAULT '3',
-  `status` enum('active','suspend','','') NOT NULL DEFAULT 'active',
-  `role` enum('admin','staff','','') NOT NULL DEFAULT 'admin',
-  `2fa_status` enum('enable','disable','','') NOT NULL DEFAULT 'disable',
+  `status` enum('active','suspend') NOT NULL DEFAULT 'active',
+  `role` enum('admin','staff') NOT NULL DEFAULT 'admin',
+  `2fa_status` enum('enable','disable') NOT NULL DEFAULT 'disable',
   `2fa_secret` varchar(20) NOT NULL DEFAULT '--',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
@@ -88,7 +88,7 @@ CREATE TABLE `pp_api` (
   `api_key` varchar(60) NOT NULL,
   `expired_date` text NOT NULL DEFAULT '--',
   `api_scopes` text NOT NULL,
-  `status` enum('active','inactive','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -102,11 +102,11 @@ CREATE TABLE `pp_api` (
 CREATE TABLE `pp_balance_verification` (
   `id` int(11) NOT NULL,
   `device_id` varchar(15) NOT NULL,
-  `sender_key` varchar(15) NOT NULL,
-  `type` enum('Personal','Agent','Merchant','') NOT NULL DEFAULT 'Personal',
+  `sender_key` varchar(15) NOT NULL DEFAULT '--',
+  `type` enum('Personal','Agent','Merchant') NOT NULL DEFAULT 'Personal',
   `current_balance` decimal(20,8) NOT NULL,
   `simslot` varchar(6) NOT NULL,
-  `status` enum('active','inactive','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -139,10 +139,10 @@ CREATE TABLE `pp_brands` (
   `timezone` text NOT NULL DEFAULT 'Asia/Dhaka',
   `language` text NOT NULL DEFAULT 'en',
   `currency_code` text NOT NULL DEFAULT 'BDT',
-  `autoExchange` enum('disabled','enabled','','') NOT NULL DEFAULT 'disabled',
+  `autoExchange` enum('disabled','enabled') NOT NULL DEFAULT 'disabled',
   `payment_tolerance` text NOT NULL DEFAULT '0',
-  `created_date` varchar(20) NOT NULL DEFAULT '''--''',
-  `updated_date` varchar(20) NOT NULL DEFAULT '''--'''
+  `created_date` varchar(20) NOT NULL DEFAULT '--',
+  `updated_date` varchar(20) NOT NULL DEFAULT '--'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -158,7 +158,7 @@ CREATE TABLE `pp_browser_log` (
   `browser` varchar(10) NOT NULL,
   `device` varchar(10) NOT NULL,
   `ip` varchar(15) NOT NULL,
-  `status` enum('active','expired','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','expired') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -192,9 +192,9 @@ CREATE TABLE `pp_customer` (
   `name` text NOT NULL,
   `email` varchar(100) NOT NULL,
   `mobile` varchar(15) NOT NULL,
-  `status` enum('active','suspend','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','suspend') NOT NULL DEFAULT 'active',
   `suspend_reason` text NOT NULL DEFAULT '--',
-  `inserted_via` enum('manual','checkout','','') NOT NULL DEFAULT 'manual',
+  `inserted_via` enum('manual','checkout') NOT NULL DEFAULT 'manual',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -209,15 +209,15 @@ CREATE TABLE `pp_device` (
   `id` int(11) NOT NULL,
   `d_id` varchar(40) NOT NULL,
   `device_id` varchar(15) NOT NULL,
-  `tk_id` varchar(25) NOT NULL DEFAULT '--',
   `otp` varchar(15) NOT NULL,
   `name` text NOT NULL DEFAULT '--',
   `model` text NOT NULL DEFAULT '--',
   `android_level` text NOT NULL DEFAULT '--',
-  `app_version` text NOT NULL,
-  `status` enum('processing','used','','') NOT NULL DEFAULT 'processing',
+  `app_version` text NOT NULL DEFAULT '--',
+  `status` enum('processing','used') NOT NULL DEFAULT 'processing',
   `created_date` varchar(20) NOT NULL,
-  `updated_date` varchar(20) NOT NULL
+  `updated_date` varchar(20) NOT NULL,
+  `last_sync` varchar(20) NOT NULL DEFAULT '--'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -229,7 +229,7 @@ CREATE TABLE `pp_device` (
 CREATE TABLE `pp_domain` (
   `id` int(11) NOT NULL,
   `domain` varchar(50) NOT NULL,
-  `status` enum('active','inactive','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -260,7 +260,7 @@ CREATE TABLE `pp_faq` (
   `brand_id` varchar(15) NOT NULL,
   `title` text NOT NULL,
   `description` text NOT NULL,
-  `status` enum('active','inactive','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -290,8 +290,8 @@ CREATE TABLE `pp_gateways` (
   `text_color` text NOT NULL DEFAULT '--',
   `btn_color` text NOT NULL DEFAULT '--',
   `btn_text_color` text NOT NULL DEFAULT '--',
-  `tab` enum('mfs','bank','global','') NOT NULL,
-  `status` enum('active','inactive','','') NOT NULL DEFAULT 'active',
+  `tab` enum('mfs','bank','global') NOT NULL,
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -368,7 +368,7 @@ CREATE TABLE `pp_payment_link` (
   `quantity` int(11) NOT NULL DEFAULT 0,
   `currency` text NOT NULL,
   `expired_date` text NOT NULL,
-  `status` enum('active','inactive','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -385,7 +385,7 @@ CREATE TABLE `pp_payment_link_field` (
   `formType` text NOT NULL,
   `fieldName` text NOT NULL,
   `value` text NOT NULL,
-  `required` enum('true','false','','') NOT NULL DEFAULT 'true',
+  `required` enum('true','false') NOT NULL DEFAULT 'true',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -401,7 +401,7 @@ CREATE TABLE `pp_permission` (
   `brand_id` varchar(15) NOT NULL,
   `a_id` varchar(15) NOT NULL,
   `permission` text NOT NULL,
-  `status` enum('active','suspend','','') NOT NULL DEFAULT 'active',
+  `status` enum('active','suspend') NOT NULL DEFAULT 'active',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -414,10 +414,10 @@ CREATE TABLE `pp_permission` (
 
 CREATE TABLE `pp_sms_data` (
   `id` int(11) NOT NULL,
-  `source` enum('app','web','','') NOT NULL DEFAULT 'web',
+  `source` enum('app','web') NOT NULL DEFAULT 'web',
   `device_id` varchar(15) NOT NULL,
   `sender` varchar(15) NOT NULL DEFAULT '--',
-  `sender_key` varchar(15) NOT NULL,
+  `sender_key` varchar(15) NOT NULL DEFAULT '--',
   `simslot` text NOT NULL DEFAULT '--',
   `number` varchar(20) NOT NULL DEFAULT '--',
   `amount` decimal(20,8) NOT NULL DEFAULT 0.00000000,
@@ -426,9 +426,9 @@ CREATE TABLE `pp_sms_data` (
   `balance` varchar(70) NOT NULL DEFAULT '--',
   `message` text NOT NULL DEFAULT '--',
   `reason` text NOT NULL DEFAULT '--',
-  `type` enum('Personal','Agent','Merchant','') NOT NULL DEFAULT 'Personal',
-  `entry_type` enum('manual','automatic','','') NOT NULL DEFAULT 'automatic',
-  `edit_status` enum('done','pending','','') NOT NULL DEFAULT 'pending',
+  `type` enum('Personal','Agent','Merchant') NOT NULL DEFAULT 'Personal',
+  `entry_type` enum('manual','automatic') NOT NULL DEFAULT 'automatic',
+  `edit_status` enum('done','pending') NOT NULL DEFAULT 'pending',
   `status` enum('approved','awaiting-review','used','error') NOT NULL DEFAULT 'approved',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
@@ -482,7 +482,7 @@ CREATE TABLE `pp_webhook_log` (
   `attempts` int(11) NOT NULL DEFAULT 0,
   `response_body` text NOT NULL DEFAULT '--',
   `http_code` text NOT NULL DEFAULT '--',
-  `status` enum('completed','pending','canceled','') NOT NULL DEFAULT 'pending',
+  `status` enum('completed','pending','canceled') NOT NULL DEFAULT 'pending',
   `created_date` varchar(20) NOT NULL,
   `updated_date` varchar(20) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -574,7 +574,6 @@ ALTER TABLE `pp_device`
   ADD KEY `created_date` (`created_date`,`updated_date`),
   ADD KEY `a_id` (`d_id`),
   ADD KEY `otp` (`otp`),
-  ADD KEY `tk_id` (`tk_id`),
   ADD KEY `status` (`status`);
 
 --
