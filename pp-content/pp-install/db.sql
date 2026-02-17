@@ -457,7 +457,7 @@ CREATE TABLE `pp_transaction` (
   `trx_slip` text NOT NULL DEFAULT '--',
   `gateway_id` varchar(50) NOT NULL DEFAULT '--',
   `sender_key` varchar(50) NOT NULL DEFAULT '--',
-  `sender_type` varchar(11) NOT NULL,
+  `sender_type` varchar(11) NOT NULL DEFAULT '--',
   `source_info` text NOT NULL DEFAULT '--',
   `metadata` text NOT NULL DEFAULT '--',
   `status` enum('completed','pending','refunded','initiated','canceled') NOT NULL DEFAULT 'initiated',
