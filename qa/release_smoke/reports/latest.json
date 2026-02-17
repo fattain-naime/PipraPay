@@ -1,0 +1,30 @@
+{
+    "suite": "piprapay_ws6_release_smoke",
+    "run_id": "20260217112133-8e50ea1d",
+    "started_at": "2026-02-17T11:21:33+00:00",
+    "finished_at": "2026-02-17T11:21:34+00:00",
+    "cleanup_enabled": true,
+    "status": "PASS",
+    "results": [
+        {
+            "name": "IDEMPOTENCY_REPLAY",
+            "status": "PASS",
+            "duration_ms": 28
+        },
+        {
+            "name": "DUPLICATE_WEBHOOK",
+            "status": "PASS",
+            "duration_ms": 7
+        },
+        {
+            "name": "LEDGER_INVARIANT",
+            "status": "PASS",
+            "duration_ms": 176
+        },
+        {
+            "name": "ROLLBACK_PARTIAL_FAILURE",
+            "status": "PASS",
+            "duration_ms": 3
+        }
+    ]
+}

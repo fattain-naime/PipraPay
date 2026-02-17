@@ -1,0 +1,7 @@
+<?php
+    $db_host = 'localhost';
+    $db_user = 'root';
+    $db_pass = 'root';
+    $db_name = 'ppnew';
+    $db_prefix = 'pp_';
+?>
