@@ -39,6 +39,237 @@
                 PDO::ATTR_AUTOCOMMIT => false
             ]);
 
+            $runSqlStatements = static function (PDO $pdoConn, string $sql): void {
+                $queries = array_filter(array_map('trim', preg_split('/;\s*\R/', $sql) ?: []));
+                foreach ($queries as $query) {
+                    if ($query !== '') {
+                        $pdoConn->exec($query);
+                    }
+                }
+            };
+
+            $runPreflightChecks = static function (PDO $pdoConn, string $prefix): array {
+                $checkResult = static function (string $name, bool $ok, string $details): array {
+                    return [
+                        'check_name' => $name,
+                        'status' => $ok ? 'PASS' : 'FAIL',
+                        'details' => $details,
+                    ];
+                };
+
+                $checkWarnResult = static function (string $name, bool $ok, string $details): array {
+                    return [
+                        'check_name' => $name,
+                        'status' => $ok ? 'PASS' : 'WARN',
+                        'details' => $details,
+                    ];
+                };
+
+                $checks = [];
+                $dbName = (string)$pdoConn->query('SELECT DATABASE()')->fetchColumn();
+                $checks[] = $checkResult('db_selected', $dbName !== '', $dbName !== '' ? $dbName : 'NO_DATABASE_SELECTED');
+
+                $tableExists = static function (PDO $pdoConnInner, string $db, string $tableName): bool {
+                    $stmt = $pdoConnInner->prepare(
+                        "SELECT 1 FROM information_schema.tables WHERE table_schema = :schema_name AND table_name = :table_name LIMIT 1"
+                    );
+                    $stmt->execute([
+                        ':schema_name' => $db,
+                        ':table_name' => $tableName,
+                    ]);
+                    return (bool)$stmt->fetchColumn();
+                };
+
+                $indexExists = static function (PDO $pdoConnInner, string $db, string $tableName, string $indexName): bool {
+                    $stmt = $pdoConnInner->prepare(
+                        "SELECT 1 FROM information_schema.statistics
+                         WHERE table_schema = :schema_name AND table_name = :table_name AND index_name = :index_name
+                         LIMIT 1"
+                    );
+                    $stmt->execute([
+                        ':schema_name' => $db,
+                        ':table_name' => $tableName,
+                        ':index_name' => $indexName,
+                    ]);
+                    return (bool)$stmt->fetchColumn();
+                };
+
+                $fkExists = static function (PDO $pdoConnInner, string $db, string $tableName, string $constraintName): bool {
+                    $stmt = $pdoConnInner->prepare(
+                        "SELECT 1 FROM information_schema.table_constraints
+                         WHERE table_schema = :schema_name
+                           AND table_name = :table_name
+                           AND constraint_name = :constraint_name
+                           AND constraint_type = 'FOREIGN KEY'
+                         LIMIT 1"
+                    );
+                    $stmt->execute([
+                        ':schema_name' => $db,
+                        ':table_name' => $tableName,
+                        ':constraint_name' => $constraintName,
+                    ]);
+                    return (bool)$stmt->fetchColumn();
+                };
+
+                $requiredTables = [
+                    'idempotency_keys',
+                    'payment_intents',
+                    'payment_attempts',
+                    'ledger_journal',
+                    'ledger_entries',
+                    'webhook_events',
+                    'audit_logs',
+                    'reconciliation_runs',
+                    'reconciliation_items',
+                    'api_keys',
+                ];
+
+                foreach ($requiredTables as $table) {
+                    $fullTable = $prefix . $table;
+                    $checks[] = $checkResult(
+                        'table_' . $fullTable,
+                        $tableExists($pdoConn, $dbName, $fullTable),
+                        $fullTable . ' exists'
+                    );
+                }
+
+                $schemaObjectName = static function (string $canonicalName) use ($prefix): string {
+                    if ($prefix === 'pp_') {
+                        return $canonicalName;
+                    }
+                    return str_replace('pp_', $prefix, $canonicalName);
+                };
+
+                $requiredIndexes = [
+                    ['payment_intents', 'uq_pp_payment_intents_idempotency_key'],
+                    ['webhook_events', 'uq_pp_webhook_events_provider_event'],
+                    ['api_keys', 'uq_pp_api_keys_key_hash'],
+                    ['ledger_journal', 'uq_pp_ledger_journal_event_ref'],
+                ];
+
+                foreach ($requiredIndexes as [$table, $index]) {
+                    $checks[] = $checkResult(
+                        'index_' . $index,
+                        $indexExists($pdoConn, $dbName, $prefix . $table, $schemaObjectName($index)),
+                        $schemaObjectName($index) . ' exists'
+                    );
+                }
+
+                $requiredFks = [
+                    ['payment_intents', 'fk_pp_payment_intents_legacy_transaction_ref'],
+                    ['payment_intents', 'fk_pp_payment_intents_brand_id'],
+                    ['payment_attempts', 'fk_pp_payment_attempts_intent'],
+                    ['ledger_entries', 'fk_pp_ledger_entries_journal'],
+                    ['api_keys', 'fk_pp_api_keys_api_id'],
+                ];
+
+                foreach ($requiredFks as [$table, $fk]) {
+                    $checks[] = $checkResult(
+                        $fk,
+                        $fkExists($pdoConn, $dbName, $prefix . $table, $schemaObjectName($fk)),
+                        'FK exists'
+                    );
+                }
+
+                $sql1101Stmt = $pdoConn->prepare(
+                    "SELECT COUNT(*) AS total
+                     FROM information_schema.columns
+                     WHERE table_schema = :schema_name
+                       AND data_type IN ('tinytext', 'text', 'mediumtext', 'longtext', 'tinyblob', 'blob', 'mediumblob', 'longblob', 'json')
+                       AND column_default IS NOT NULL"
+                );
+                $sql1101Stmt->execute([':schema_name' => $dbName]);
+                $violatingColumns = (int)$sql1101Stmt->fetchColumn();
+                $checks[] = $checkResult(
+                    'sql1101_default_guard',
+                    $violatingColumns === 0,
+                    'violating_columns=' . $violatingColumns
+                );
+
+                $readyApiStmt = $pdoConn->query(
+                    "SELECT 1
+                     FROM `{$prefix}api_keys` ak
+                     INNER JOIN `{$prefix}api` a ON a.id = ak.api_id
+                     WHERE ak.status = 'active' AND a.status = 'active'
+                     LIMIT 1"
+                );
+                $checks[] = $checkWarnResult(
+                    'ready_active_hashed_api_key_present',
+                    (bool)$readyApiStmt->fetchColumn(),
+                    'Create at least one active API key in admin before go-live'
+                );
+
+                $transactionCount = (int)$pdoConn->query("SELECT COUNT(*) FROM `{$prefix}transaction`")->fetchColumn();
+                $checks[] = $checkWarnResult(
+                    'ready_no_runtime_transactions_yet',
+                    $transactionCount === 0,
+                    'Fresh import usually has 0 runtime transactions'
+                );
+
+                $webhookSignatureRowsStmt = $pdoConn->query(
+                    "SELECT brand_id, LOWER(value) AS value
+                     FROM `{$prefix}env`
+                     WHERE option_name = 'invoice-webhook-signature-required'
+                     ORDER BY id DESC"
+                );
+                $webhookSignatureRows = $webhookSignatureRowsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                $latestSignatureByScope = [];
+                foreach ($webhookSignatureRows as $row) {
+                    $scope = (string)($row['brand_id'] ?? 'both');
+                    if (!array_key_exists($scope, $latestSignatureByScope)) {
+                        $latestSignatureByScope[$scope] = (string)($row['value'] ?? '1');
+                    }
+                }
+
+                $signatureMustBeVerified = true;
+                if (!empty($latestSignatureByScope)) {
+                    $signatureMustBeVerified = false;
+                    foreach ($latestSignatureByScope as $flagValue) {
+                        $isDisabled = in_array($flagValue, ['0', 'false', 'no', 'off', 'disable', 'disabled'], true);
+                        if (!$isDisabled) {
+                            $signatureMustBeVerified = true;
+                            break;
+                        }
+                    }
+                }
+
+                $webhookSecretConfiguredStmt = $pdoConn->query(
+                    "SELECT 1
+                     FROM `{$prefix}env`
+                     WHERE option_name = 'invoice-webhook-secret'
+                       AND TRIM(value) <> ''
+                       AND TRIM(value) <> '--'
+                     LIMIT 1"
+                );
+                $webhookSecretConfigured = (bool)$webhookSecretConfiguredStmt->fetchColumn();
+                $checks[] = $checkWarnResult(
+                    'ready_invoice_webhook_signature_config',
+                    !$signatureMustBeVerified || $webhookSecretConfigured,
+                    'If signature is enabled, configure invoice-webhook-secret in Brand Settings > Api Settings (or env).'
+                );
+
+                $blocking = [];
+                $warnings = [];
+
+                foreach ($checks as $check) {
+                    if ($check['status'] === 'FAIL') {
+                        if (strpos($check['check_name'], 'ready_') === 0) {
+                            $warnings[] = $check;
+                        } else {
+                            $blocking[] = $check;
+                        }
+                    } elseif ($check['status'] === 'WARN') {
+                        $warnings[] = $check;
+                    }
+                }
+
+                return [
+                    'checks' => $checks,
+                    'blocking' => $blocking,
+                    'warnings' => $warnings,
+                ];
+            };
+
             // Read SQL file
             $sqlContent = file_get_contents(__DIR__ . '/db.sql');
             if ($sqlContent === false) {
@@ -49,15 +280,20 @@
                 $sqlContent = str_replace('pp_', $tablePrefix, $sqlContent);
             }
 
-            $queries = array_filter(array_map('trim', explode(";\n", $sqlContent)));
-
             // Start transaction AFTER SQL is prepared
             $pdo->beginTransaction();
 
-            foreach ($queries as $query) {
-                if ($query !== '') {
-                    $pdo->exec($query);
-                }
+            $runSqlStatements($pdo, $sqlContent);
+
+            $effectivePrefix = (!empty($tablePrefix) && $tablePrefix !== 'pp_') ? $tablePrefix : 'pp_';
+            $preflightResult = $runPreflightChecks($pdo, $effectivePrefix);
+            if (!empty($preflightResult['blocking'])) {
+                $failedChecks = array_map(static function (array $item): string {
+                    $detail = trim((string)($item['details'] ?? ''));
+                    return $item['check_name'] . ($detail !== '' ? " ({$detail})" : '');
+                }, $preflightResult['blocking']);
+
+                throw new Exception('Preflight validation failed: ' . implode(', ', $failedChecks));
             }
 
             if ($pdo->inTransaction()) {
@@ -75,7 +311,18 @@
 
             file_put_contents(__DIR__ . '/../../pp-temp-config.php', $configContent);
 
-            echo json_encode(['status' => 'true', 'title' => 'Imported successfully', 'message' => 'Database connection verified and imported successfully.']);
+            $warningCount = count($preflightResult['warnings'] ?? []);
+            $successMessage = 'Database connection verified and imported successfully.';
+            if ($warningCount > 0) {
+                $successMessage .= " Preflight completed with {$warningCount} warning(s).";
+            }
+
+            echo json_encode([
+                'status' => 'true',
+                'title' => 'Imported successfully',
+                'message' => $successMessage,
+                'preflight_warnings' => $preflightResult['warnings'] ?? []
+            ]);
         } catch (Throwable $e) {
             if (isset($pdo) && $pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -386,6 +633,13 @@
                         </div>
                     </form>
 
+                    <div class="alert alert-warning mt-3 d-none" id="preflightWarningsPanel">
+                        <div class="d-flex flex-column gap-2">
+                            <div class="fw-semibold">Preflight Warnings</div>
+                            <div class="small text-muted" id="preflightWarningsSummary"></div>
+                            <ul class="mb-0 ps-3" id="preflightWarningsList"></ul>
+                        </div>
+                    </div>
 
                     <div class="row mt-4">
                         <div class="col-12">
@@ -577,6 +831,68 @@
         ?>
 
         $(document).ready(function() {
+            function escapeHtml(value) {
+                return String(value ?? '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function getFriendlyPreflightWarningTitle(checkName) {
+                const name = String(checkName || '').trim();
+                const exactMap = {
+                    ready_active_hashed_api_key_present: 'No active API key configured yet',
+                    ready_no_runtime_transactions_yet: 'No runtime transaction data found',
+                    ready_invoice_webhook_signature_config: 'Webhook signature secret/config needs review'
+                };
+
+                if (exactMap[name]) {
+                    return exactMap[name];
+                }
+
+                if (name.startsWith('table_')) {
+                    const tableName = name.substring('table_'.length);
+                    return `Schema check notice for table: ${tableName}`;
+                }
+
+                if (name.startsWith('index_')) {
+                    const indexName = name.substring('index_'.length);
+                    return `Index check notice: ${indexName}`;
+                }
+
+                return name.replace(/_/g, ' ');
+            }
+
+            function renderPreflightWarnings(warnings) {
+                const panel = document.getElementById('preflightWarningsPanel');
+                const summary = document.getElementById('preflightWarningsSummary');
+                const list = document.getElementById('preflightWarningsList');
+
+                if (!panel || !summary || !list) {
+                    return;
+                }
+
+                const items = Array.isArray(warnings) ? warnings : [];
+                if (items.length === 0) {
+                    panel.classList.add('d-none');
+                    summary.textContent = '';
+                    list.innerHTML = '';
+                    return;
+                }
+
+                summary.textContent = `Preflight completed with ${items.length} warning(s). These are non-blocking but should be reviewed before go-live.`;
+
+                list.innerHTML = items.map((item) => {
+                    const title = escapeHtml(getFriendlyPreflightWarningTitle(item.check_name || 'Warning'));
+                    const detail = escapeHtml(item.details || 'No additional details.');
+                    return `<li class="mb-2"><div class="fw-medium">${title}</div><div class="small text-muted">${detail}</div></li>`;
+                }).join('');
+
+                panel.classList.remove('d-none');
+            }
+
             $('.database-config-extra input[name="dbDriver"]').on('change', function () {
                 $('.database-config-extra input[name="dbDriver"]').not(this).prop('checked', false);
             });
@@ -620,6 +936,7 @@
 
                         if (response.status === true || response.status === 'true') {
                             $('#btnNextToAdmin').prop('disabled', false);
+                            renderPreflightWarnings(response.preflight_warnings || []);
 
                             createToast({
                                 title: `${response.title}`,
@@ -629,6 +946,7 @@
                                 top: 20
                             });
                         } else {
+                            renderPreflightWarnings([]);
                             createToast({
                                 title: 'Action Required',
                                 description: `${response.message}`,
@@ -640,6 +958,7 @@
                     },
                     error: function (xhr, status, error) {
                         btn.text('Check & Import');
+                        renderPreflightWarnings([]);
 
                         createToast({
                             title: 'Action Required',

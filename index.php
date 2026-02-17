@@ -335,29 +335,14 @@
                         header('Content-Type: application/json');
 
                         $apiKey = getAuthorizationHeader();
-
-                        $params = [ ':api_key' => $apiKey ];
-
-                        $response_api = json_decode(getData($db_prefix.'api','WHERE api_key = :api_key AND status = "active"', '* FROM', $params),true);
-                        if($response_api['status'] == false){
+                        $response_api = pp_find_active_api_credential($apiKey);
+                        if(!$response_api || ($response_api['status'] ?? false) == false){
                             http_response_code(400);
 
                             echo json_encode([
                                 'error' => [
                                     'code'    => 'INVALID_API_KEY',
                                     'message' => 'The API key provided is incorrect or invalid.'
-                                ]
-                            ]);
-                            exit;
-                        }
-
-                        if(isExpired($response_api['response'][0]['expired_date'])){
-                            http_response_code(400);
-
-                            echo json_encode([
-                                'error' => [
-                                    'code'    => 'INVALID_API_KEY',
-                                    'message' => 'The API key provided is incorrect or expired.'
                                 ]
                             ]);
                             exit;
@@ -398,6 +383,7 @@
                             }
 
                             $checkout_type = $segments[2] ?? null;
+                            $idempotencyKey = pp_get_idempotency_key_from_request();
 
                             if($checkout_type == "redirect"){
                                 $fullName      = $data['full_name'] ?? '';
@@ -590,18 +576,67 @@
                                         exit;
                                     }
 
-                                    $payment_id = generateItemID(27, 27);
+                                    try {
+                                        $paymentInit = pp_initiate_payment([
+                                            'brand_id' => $response_api['response'][0]['brand_id'],
+                                            'source' => 'api',
+                                            'amount' => money_sanitize($amount),
+                                            'currency' => $currency,
+                                            'customer' => [
+                                                'name' => $fullName,
+                                                'email' => $email,
+                                                'mobile' => $mobile,
+                                            ],
+                                            'metadata' => $metadata,
+                                            'return_url' => $returnUrl,
+                                            'webhook_url' => $webhookUrl,
+                                            'idempotency_key' => $idempotencyKey,
+                                            'idempotency_scope' => 'api_checkout_redirect:' . $response_api['response'][0]['brand_id'],
+                                        ]);
+                                    } catch (RuntimeException $e) {
+                                        $runtimeMessage = strtolower(trim($e->getMessage()));
+                                        if (strpos($runtimeMessage, 'idempotency') !== false) {
+                                            http_response_code(409);
+                                            echo json_encode([
+                                                'error' => [
+                                                    'code' => 'IDEMPOTENCY_CONFLICT',
+                                                    'message' => $e->getMessage()
+                                                ]
+                                            ]);
+                                            exit;
+                                        }
 
-                                    $customerInfoJson = json_encode([
-                                        'name'   => $fullName,
-                                        'email'  => $email,
-                                        'mobile' => $mobile
-                                    ], JSON_UNESCAPED_UNICODE);
+                                        if (strpos($runtimeMessage, 'schema is not ready') !== false) {
+                                            http_response_code(503);
+                                            echo json_encode([
+                                                'error' => [
+                                                    'code' => 'FINTECH_SCHEMA_NOT_READY',
+                                                    'message' => 'Payment service is not ready. Please contact support.'
+                                                ]
+                                            ]);
+                                            exit;
+                                        }
 
-                                    $columns = ['brand_id', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'return_url', 'webhook_url', 'created_date', 'updated_date'];
-                                    $values = [$response_api['response'][0]['brand_id'], $payment_id, $customerInfoJson, money_sanitize($amount), $currency, json_encode($metadata), $returnUrl, $webhookUrl, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                                        http_response_code(500);
+                                        echo json_encode([
+                                            'error' => [
+                                                'code' => 'PAYMENT_INIT_FAILED',
+                                                'message' => 'Unable to initialize payment right now.'
+                                            ]
+                                        ]);
+                                        exit;
+                                    } catch (Throwable $e) {
+                                        http_response_code(500);
+                                        echo json_encode([
+                                            'error' => [
+                                                'code' => 'PAYMENT_INIT_FAILED',
+                                                'message' => 'Unable to initialize payment right now.'
+                                            ]
+                                        ]);
+                                        exit;
+                                    }
 
-                                    insertData($db_prefix.'transaction', $columns, $values);
+                                    $payment_id = $paymentInit['payment_id'];
 
                                     $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email ];
 
@@ -615,7 +650,11 @@
                                         insertData($db_prefix.'customer', $columns, $values);
                                     }
 
-                                    echo json_encode(['pp_id' => $payment_id, 'pp_url' => $site_url.$path_payment.'/'.$payment_id]);
+                                    echo json_encode([
+                                        'pp_id' => $payment_id,
+                                        'pp_url' => $site_url.$path_payment.'/'.$payment_id,
+                                        'idempotent_replay' => (bool)($paymentInit['replay'] ?? false)
+                                    ]);
                                 }else{
                                     http_response_code(400);
                                     echo json_encode([
@@ -728,18 +767,66 @@
                                         }
 
 
-                                        $payment_id = generateItemID(27, 27);
+                                        try {
+                                            $paymentInit = pp_initiate_payment([
+                                                'brand_id' => $response_api['response'][0]['brand_id'],
+                                                'source' => 'api',
+                                                'amount' => money_sanitize($amount),
+                                                'currency' => $currency,
+                                                'customer' => [
+                                                    'name' => $fullName,
+                                                    'email' => $email,
+                                                    'mobile' => $mobile,
+                                                ],
+                                                'metadata' => $metadata,
+                                                'webhook_url' => $webhookUrl,
+                                                'idempotency_key' => $idempotencyKey,
+                                                'idempotency_scope' => 'api_checkout_popup:' . $response_api['response'][0]['brand_id'],
+                                            ]);
+                                        } catch (RuntimeException $e) {
+                                            $runtimeMessage = strtolower(trim($e->getMessage()));
+                                            if (strpos($runtimeMessage, 'idempotency') !== false) {
+                                                http_response_code(409);
+                                                echo json_encode([
+                                                    'error' => [
+                                                        'code' => 'IDEMPOTENCY_CONFLICT',
+                                                        'message' => $e->getMessage()
+                                                    ]
+                                                ]);
+                                                exit;
+                                            }
 
-                                        $customerInfoJson = json_encode([
-                                            'name'   => $fullName,
-                                            'email'  => $email,
-                                            'mobile' => $mobile
-                                        ], JSON_UNESCAPED_UNICODE);
+                                            if (strpos($runtimeMessage, 'schema is not ready') !== false) {
+                                                http_response_code(503);
+                                                echo json_encode([
+                                                    'error' => [
+                                                        'code' => 'FINTECH_SCHEMA_NOT_READY',
+                                                        'message' => 'Payment service is not ready. Please contact support.'
+                                                    ]
+                                                ]);
+                                                exit;
+                                            }
 
-                                        $columns = ['brand_id', 'ref', 'customer_info', 'amount', 'currency', 'metadata', 'webhook_url', 'created_date', 'updated_date'];
-                                        $values = [$response_api['response'][0]['brand_id'], $payment_id, $customerInfoJson, money_sanitize($amount), $currency, json_encode($metadata), $webhookUrl, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                                            http_response_code(500);
+                                            echo json_encode([
+                                                'error' => [
+                                                    'code' => 'PAYMENT_INIT_FAILED',
+                                                    'message' => 'Unable to initialize payment right now.'
+                                                ]
+                                            ]);
+                                            exit;
+                                        } catch (Throwable $e) {
+                                            http_response_code(500);
+                                            echo json_encode([
+                                                'error' => [
+                                                    'code' => 'PAYMENT_INIT_FAILED',
+                                                    'message' => 'Unable to initialize payment right now.'
+                                                ]
+                                            ]);
+                                            exit;
+                                        }
 
-                                        insertData($db_prefix.'transaction', $columns, $values);
+                                        $payment_id = $paymentInit['payment_id'];
 
                                         $params = [ ':brand_id' => $response_api['response'][0]['brand_id'], ':email' => $email ];
 
@@ -753,7 +840,11 @@
                                             insertData($db_prefix.'customer', $columns, $values);
                                         }
 
-                                        echo json_encode(['pp_id' => $payment_id, 'pp_url' => $site_url.$path_payment.'/'.$payment_id]);
+                                        echo json_encode([
+                                            'pp_id' => $payment_id,
+                                            'pp_url' => $site_url.$path_payment.'/'.$payment_id,
+                                            'idempotent_replay' => (bool)($paymentInit['replay'] ?? false)
+                                        ]);
                                     }else{
                                         http_response_code(400);
                                         echo json_encode([
@@ -892,11 +983,22 @@
 
                                         $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref', '* FROM', $params),true);
                                         if($response_transaction['status'] == true){
-                                            $columns = ['status',  'updated_date'];
-                                            $values = ['refunded', getCurrentDatetime('Y-m-d H:i:s')];
-                                            $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
-
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                            $transitioned = pp_transition_transaction_status((string)$response_transaction['response'][0]['ref'], 'refunded', [], [
+                                                'actor_type' => 'api',
+                                                'actor_id' => (string)$response_api['response'][0]['brand_id'],
+                                                'gateway_id' => (string)($response_transaction['response'][0]['gateway_id'] ?? '--'),
+                                                'provider_ref' => (string)($response_transaction['response'][0]['trx_id'] ?? ''),
+                                            ]);
+                                            if (!$transitioned) {
+                                                http_response_code(409);
+                                                echo json_encode([
+                                                    'error' => [
+                                                        'code' => 'INVALID_STATE_TRANSITION',
+                                                        'message' => 'Refund is not allowed for current payment state.'
+                                                    ]
+                                                ]);
+                                                exit;
+                                            }
 
 
                                             $metadata = json_decode($response_transaction['response'][0]['metadata'], true) ?: [];
@@ -1140,12 +1242,73 @@
                                 exit('Invalid JSON');
                             }
 
-                            // 3️⃣ Access data (EXACT match to sender)
                             $pp_id = $data['pp_id'] ?? null;
+                            $response_transaction = ['status' => false, 'response' => []];
+                            $resolvedTransactionRef = null;
+                            $webhookBrandId = 'both';
 
-                            $params = [ ':ref' => $pp_id ];
+                            if (is_string($pp_id) && trim($pp_id) !== '') {
+                                $params = [':ref' => $pp_id];
+                                $response_transaction = json_decode(getData($db_prefix.'transaction', 'WHERE ref = :ref', '* FROM', $params), true);
+                                if (($response_transaction['status'] ?? false) === true) {
+                                    $resolvedTransactionRef = (string)$response_transaction['response'][0]['ref'];
+                                    $webhookBrandId = (string)($response_transaction['response'][0]['brand_id'] ?? 'both');
+                                }
+                            }
 
-                            $response_transaction = json_decode(getData($db_prefix.'transaction','WHERE ref = :ref', '* FROM', $params),true);
+                            $webhookService = pp_get_webhook_service();
+                            $webhookSecurity = pp_get_invoice_webhook_security_config($webhookBrandId);
+
+                            $webhookSignature = (string)($_SERVER['HTTP_X_PIPRAPAY_SIGNATURE'] ?? '');
+                            $webhookEventRef = (string)($data['event_id'] ?? ($pp_id ?: hash('sha256', $raw)));
+                            $invoiceWebhookSecret = trim((string)($webhookSecurity['secret'] ?? ''));
+                            $signatureRequired = (bool)($webhookSecurity['signature_required'] ?? true);
+                            $timestampRequired = (bool)($webhookSecurity['timestamp_required'] ?? true);
+
+                            $eventEpoch = $webhookService->extractEventEpoch($data, $_SERVER);
+                            $timestampValidation = $webhookService->validateTimestamp(
+                                $eventEpoch,
+                                (int)($webhookSecurity['max_age_seconds'] ?? 300),
+                                (int)($webhookSecurity['clock_skew_seconds'] ?? 60),
+                                $timestampRequired
+                            );
+                            if (($timestampValidation['valid'] ?? false) !== true) {
+                                http_response_code(400);
+                                exit('Invalid webhook timestamp');
+                            }
+
+                            if ($signatureRequired && $invoiceWebhookSecret === '') {
+                                http_response_code(500);
+                                exit('Webhook secret misconfigured');
+                            }
+
+                            if ($invoiceWebhookSecret !== '') {
+                                if (!$webhookService->verifySignature($raw, $webhookSignature, $invoiceWebhookSecret)) {
+                                    http_response_code(403);
+                                    exit('Invalid signature');
+                                }
+                            }
+
+                            try {
+                                $webhookIngest = $webhookService->ingest(
+                                    'invoice',
+                                    $webhookEventRef,
+                                    $raw,
+                                    $webhookSignature,
+                                    $resolvedTransactionRef
+                                );
+                            } catch (Throwable $e) {
+                                http_response_code(500);
+                                exit('Webhook ingestion failed');
+                            }
+
+                            if (!empty($webhookIngest['duplicate'])) {
+                                http_response_code(200);
+                                echo 'OK';
+                                exit();
+                            }
+
+                            // 3️⃣ Access data (EXACT match to sender)
                             if($response_transaction['status'] == true){
 
                                 $metadata_decode = json_decode($response_transaction['response'][0]['metadata'], true);
@@ -1212,6 +1375,10 @@
                                         do_action('invoices.updated.status', $all_invoices);
                                     }
                                 }
+                            }
+
+                            if (!empty($webhookIngest['id'])) {
+                                pp_get_webhook_service()->complete((int)$webhookIngest['id'], 'processed');
                             }
 
                             // 6️⃣ IMPORTANT: Return 200 OK
@@ -1779,11 +1946,18 @@
                                                     
                                                     updateData($db_prefix.'sms_data', $columns, $values, $condition);
 
-                                                    $columns = ['status', 'sender', 'trx_id', 'updated_date'];
-                                                    $values = ['completed', $response_pending_SMSTransaction['response'][0]['number'], $row['trx_id'], getCurrentDatetime('Y-m-d H:i:s')];
-                                                    $condition = 'id ="'.$row['id'].'"'; 
-
-                                                    updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                                    $transitioned = pp_transition_transaction_status((string)$row['ref'], 'completed', [
+                                                        'sender' => $response_pending_SMSTransaction['response'][0]['number'],
+                                                        'trx_id' => $row['trx_id'],
+                                                    ], [
+                                                        'actor_type' => 'system-cron',
+                                                        'actor_id' => 'cron',
+                                                        'gateway_id' => (string)$row['gateway_id'],
+                                                        'provider_ref' => (string)$row['trx_id'],
+                                                    ]);
+                                                    if (!$transitioned) {
+                                                        continue;
+                                                    }
 
 
                                                     $metadata = json_decode($row['metadata'], true) ?: [];

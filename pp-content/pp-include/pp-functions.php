@@ -99,6 +99,403 @@
         }
     }
 
+    $pp_fintech_bootstrap_files = [
+        __DIR__ . '/repositories/BaseRepository.php',
+        __DIR__ . '/repositories/ApiKeyRepository.php',
+        __DIR__ . '/repositories/IdempotencyRepository.php',
+        __DIR__ . '/repositories/PaymentRepository.php',
+        __DIR__ . '/repositories/LedgerRepository.php',
+        __DIR__ . '/repositories/WebhookEventRepository.php',
+        __DIR__ . '/audit/AuditLogger.php',
+        __DIR__ . '/services/IdempotencyService.php',
+        __DIR__ . '/services/PaymentService.php',
+        __DIR__ . '/services/LedgerService.php',
+        __DIR__ . '/services/WebhookService.php',
+    ];
+
+    foreach ($pp_fintech_bootstrap_files as $pp_fintech_bootstrap_file) {
+        if (is_file($pp_fintech_bootstrap_file)) {
+            require_once $pp_fintech_bootstrap_file;
+        }
+    }
+
+    function pp_get_payment_service(): PaymentService
+    {
+        static $service = null;
+        if (!$service) {
+            $service = new PaymentService();
+        }
+        return $service;
+    }
+
+    function pp_get_ledger_service(): LedgerService
+    {
+        static $service = null;
+        if (!$service) {
+            $service = new LedgerService();
+        }
+        return $service;
+    }
+
+    function pp_get_webhook_service(): WebhookService
+    {
+        static $service = null;
+        if (!$service) {
+            $service = new WebhookService();
+        }
+        return $service;
+    }
+
+    function pp_get_audit_logger(): AuditLogger
+    {
+        static $logger = null;
+        if (!$logger) {
+            $logger = new AuditLogger();
+        }
+        return $logger;
+    }
+
+    function pp_get_api_key_repository(): ApiKeyRepository
+    {
+        static $repo = null;
+        if (!$repo) {
+            $repo = new ApiKeyRepository();
+        }
+        return $repo;
+    }
+
+    function pp_mask_api_key_value(string $rawValue): string
+    {
+        if (trim($rawValue) === '') {
+            return '--';
+        }
+        $prefix = substr($rawValue, 0, 8);
+        return $prefix . str_repeat('*', 24);
+    }
+
+    function pp_assert_fintech_schema_ready(array $requiredTables = []): bool
+    {
+        global $db_prefix;
+
+        static $cache = [];
+
+        if (empty($requiredTables)) {
+            $requiredTables = [
+                'api',
+                'api_keys',
+                'idempotency_keys',
+                'payment_intents',
+                'payment_attempts',
+                'ledger_journal',
+                'ledger_entries',
+                'webhook_events',
+                'audit_logs',
+            ];
+        }
+
+        sort($requiredTables);
+        $cacheKey = implode('|', $requiredTables);
+        if (array_key_exists($cacheKey, $cache)) {
+            return $cache[$cacheKey];
+        }
+
+        try {
+            $pdo = connectDatabase();
+            foreach ($requiredTables as $table) {
+                $fullTable = $db_prefix . $table;
+                $stmt = $pdo->prepare(
+                    "SELECT 1
+                     FROM information_schema.tables
+                     WHERE table_schema = DATABASE()
+                       AND table_name = :table_name
+                     LIMIT 1"
+                );
+                $stmt->execute([':table_name' => $fullTable]);
+                if ($stmt->fetchColumn() === false) {
+                    $cache[$cacheKey] = false;
+                    return false;
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('fintech schema readiness check failed: ' . $e->getMessage());
+            $cache[$cacheKey] = false;
+            return false;
+        }
+
+        $cache[$cacheKey] = true;
+        return true;
+    }
+
+    function pp_get_idempotency_key_from_request(): ?string
+    {
+        $headers = [];
+        if (function_exists('getallheaders')) {
+            $headers = getallheaders();
+        }
+
+        $candidates = [
+            $headers['Idempotency-Key'] ?? null,
+            $headers['idempotency-key'] ?? null,
+            $_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return trim($candidate);
+            }
+        }
+
+        return null;
+    }
+
+    function pp_parse_expired_date_to_datetime(?string $expiredDate): ?string
+    {
+        $expiredDate = trim((string)$expiredDate);
+        if ($expiredDate === '' || $expiredDate === '--') {
+            return null;
+        }
+
+        $dt = DateTimeImmutable::createFromFormat('Y-m-d', $expiredDate, new DateTimeZone('UTC'));
+        if ($dt === false) {
+            return null;
+        }
+
+        return $dt->setTime(23, 59, 59, 0)->format('Y-m-d H:i:s.u');
+    }
+
+    function pp_find_active_api_credential(?string $apiKey): ?array
+    {
+        global $db_prefix;
+
+        if (!is_string($apiKey) || trim($apiKey) === '') {
+            return null;
+        }
+
+        if (!pp_assert_fintech_schema_ready(['api', 'api_keys'])) {
+            return null;
+        }
+
+        $apiKey = trim($apiKey);
+        $repo = pp_get_api_key_repository();
+        $credential = $repo->findActiveCredential($apiKey);
+        if (!$credential) {
+            return null;
+        }
+
+        if (isExpired($credential['expired_date'] ?? '--')) {
+            return null;
+        }
+
+        $scopes = $credential['api_scopes'] ?? [];
+        if (is_string($scopes)) {
+            $decoded = json_decode($scopes, true);
+            $scopes = is_array($decoded) ? $decoded : [];
+        }
+
+        $pdo = connectDatabase();
+        $stmt = $pdo->prepare("SELECT * FROM `{$db_prefix}api` WHERE id = :id LIMIT 1");
+        $stmt->execute([':id' => (int)$credential['id']]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row === false) {
+            return null;
+        }
+
+        $row['api_scopes'] = json_encode(array_values($scopes), JSON_UNESCAPED_UNICODE);
+
+        return [
+            'status' => true,
+            'response' => [$row],
+            'auth_model' => $credential['auth_model'],
+        ];
+    }
+
+    function pp_bool_from_env_value($value): bool
+    {
+        $value = strtolower(trim((string)$value));
+        return in_array($value, ['1', 'true', 'yes', 'on', 'enable', 'enabled'], true);
+    }
+
+    function pp_get_env_with_fallback(string $optionName, ?string $brandId = null, string $default = ''): string
+    {
+        $scopes = [];
+        if (is_string($brandId) && trim($brandId) !== '' && trim($brandId) !== 'both') {
+            $scopes[] = trim($brandId);
+        }
+        $scopes[] = 'both';
+
+        foreach ($scopes as $scope) {
+            $value = trim((string)get_env($optionName, $scope));
+            if ($value !== '' && $value !== '--') {
+                return $value;
+            }
+        }
+
+        return $default;
+    }
+
+    function pp_normalize_positive_int($value, int $default, int $min, int $max): int
+    {
+        $intValue = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['default' => $default]]);
+        if (!is_int($intValue)) {
+            $intValue = $default;
+        }
+
+        if ($intValue < $min) {
+            return $min;
+        }
+
+        if ($intValue > $max) {
+            return $max;
+        }
+
+        return $intValue;
+    }
+
+    function pp_get_invoice_webhook_security_config(?string $brandId = null): array
+    {
+        $secret = pp_get_env_with_fallback('invoice-webhook-secret', $brandId, '');
+        $requiredFlag = pp_get_env_with_fallback('invoice-webhook-signature-required', $brandId, '1');
+        $timestampRequiredFlag = pp_get_env_with_fallback('invoice-webhook-enforce-timestamp', $brandId, '1');
+        $maxAgeRaw = pp_get_env_with_fallback('invoice-webhook-max-age-seconds', $brandId, '300');
+        $clockSkewRaw = pp_get_env_with_fallback('invoice-webhook-clock-skew-seconds', $brandId, '60');
+
+        return [
+            'brand_id' => $brandId ?: 'both',
+            'secret' => trim($secret),
+            'signature_required' => pp_bool_from_env_value($requiredFlag),
+            'timestamp_required' => pp_bool_from_env_value($timestampRequiredFlag),
+            'max_age_seconds' => pp_normalize_positive_int($maxAgeRaw, 300, 30, 86400),
+            'clock_skew_seconds' => pp_normalize_positive_int($clockSkewRaw, 60, 0, 900),
+        ];
+    }
+
+    function pp_delete_api_credential(int $apiId, string $brandId, array $actorContext = []): array
+    {
+        global $db_prefix;
+
+        if ($apiId <= 0 || trim($brandId) === '') {
+            return ['status' => false, 'reason' => 'invalid_input'];
+        }
+
+        $beforeApi = null;
+        $hashedRowsBefore = 0;
+        $hashedRowsDeleted = 0;
+        $hashedRowsAfter = 0;
+        $apiKeysTableExists = false;
+
+        try {
+            $pdo = connectDatabase();
+            $pdo->beginTransaction();
+
+            $apiKeysTable = $db_prefix . 'api_keys';
+            $tableCheckStmt = $pdo->prepare(
+                "SELECT 1
+                 FROM information_schema.tables
+                 WHERE table_schema = DATABASE()
+                   AND table_name = :table_name
+                 LIMIT 1"
+            );
+            $tableCheckStmt->execute([':table_name' => $apiKeysTable]);
+            $apiKeysTableExists = $tableCheckStmt->fetchColumn() !== false;
+
+            $apiStmt = $pdo->prepare("SELECT * FROM `{$db_prefix}api` WHERE id = :id AND brand_id = :brand_id LIMIT 1 FOR UPDATE");
+            $apiStmt->execute([
+                ':id' => $apiId,
+                ':brand_id' => $brandId,
+            ]);
+            $beforeApi = $apiStmt->fetch(PDO::FETCH_ASSOC);
+            if ($beforeApi === false) {
+                $pdo->rollBack();
+                return ['status' => false, 'reason' => 'not_found'];
+            }
+
+            if ($apiKeysTableExists) {
+                $countBeforeStmt = $pdo->prepare("SELECT COUNT(*) FROM `{$db_prefix}api_keys` WHERE api_id = :api_id");
+                $countBeforeStmt->execute([':api_id' => $apiId]);
+                $hashedRowsBefore = (int)$countBeforeStmt->fetchColumn();
+
+                // Delete by api_id only so legacy rows with inconsistent brand_id do not block FK cleanup.
+                $deleteHashStmt = $pdo->prepare("DELETE FROM `{$db_prefix}api_keys` WHERE api_id = :api_id");
+                $deleteHashStmt->execute([':api_id' => $apiId]);
+                $hashedRowsDeleted = (int)$deleteHashStmt->rowCount();
+            }
+
+            $deleteStmt = $pdo->prepare("DELETE FROM `{$db_prefix}api` WHERE id = :id AND brand_id = :brand_id LIMIT 1");
+            $deleteStmt->execute([
+                ':id' => $apiId,
+                ':brand_id' => $brandId,
+            ]);
+
+            if ((int)$deleteStmt->rowCount() !== 1) {
+                $pdo->rollBack();
+                return ['status' => false, 'reason' => 'delete_failed'];
+            }
+
+            if ($apiKeysTableExists) {
+                $countAfterStmt = $pdo->prepare("SELECT COUNT(*) FROM `{$db_prefix}api_keys` WHERE api_id = :api_id");
+                $countAfterStmt->execute([':api_id' => $apiId]);
+                $hashedRowsAfter = (int)$countAfterStmt->fetchColumn();
+            }
+
+            $orphanFree = (!$apiKeysTableExists || $hashedRowsAfter === 0);
+            if (!$orphanFree) {
+                $pdo->rollBack();
+                return ['status' => false, 'reason' => 'orphan_detected'];
+            }
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if (isset($pdo) && $pdo instanceof PDO && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('api credential delete failed: ' . $e->getMessage());
+            return [
+                'status' => false,
+                'reason' => 'exception',
+                'error' => substr((string)$e->getMessage(), 0, 300),
+            ];
+        }
+
+        try {
+            pp_get_audit_logger()->log(
+                (string)($actorContext['actor_type'] ?? 'admin'),
+                (string)($actorContext['actor_id'] ?? 'system'),
+                'api_key_deleted',
+                'api',
+                (string)$apiId,
+                is_array($beforeApi) ? $beforeApi : null,
+                [
+                    'id' => $apiId,
+                    'brand_id' => $brandId,
+                    'api_keys_table_exists' => $apiKeysTableExists,
+                    'hash_rows_before' => $hashedRowsBefore,
+                    'hash_rows_deleted' => $hashedRowsDeleted,
+                    'orphan_free' => true,
+                ],
+                $_SERVER['HTTP_USER_AGENT'] ?? null,
+                $_SERVER['REMOTE_ADDR'] ?? null
+            );
+        } catch (Throwable $e) {
+            error_log('api delete audit failed: ' . $e->getMessage());
+        }
+
+        return [
+            'status' => true,
+            'deleted' => true,
+            'orphan_free' => true,
+            'hash_rows_deleted' => $hashedRowsDeleted,
+        ];
+    }
+
+    function pp_initiate_payment(array $payload): array
+    {
+        if (!pp_assert_fintech_schema_ready()) {
+            throw new RuntimeException('Fintech schema is not ready for payment initiation.');
+        }
+
+        return pp_get_payment_service()->initiate($payload);
+    }
+
     function timeAgo($datetime) {
         global $global_response_brand;
 
@@ -552,17 +949,34 @@
         return strtolower($host);
     }
 
-    function sendIPN(string $url, array $payload): int {
+    function pp_build_ipn_headers(string $jsonPayload, ?string $brandId = null): array
+    {
+        $headers = [
+            'Content-Type: application/json',
+            'Connection: close',
+        ];
+
+        $headers[] = 'X-PIPRAPAY-TIMESTAMP: ' . (string)time();
+        $headers[] = 'X-PIPRAPAY-SIGN-ALG: hmac-sha256';
+
+        $config = pp_get_invoice_webhook_security_config($brandId);
+        $secret = trim((string)($config['secret'] ?? ''));
+        if ($secret !== '') {
+            $signature = hash_hmac('sha256', $jsonPayload, $secret);
+            $headers[] = 'X-PIPRAPAY-SIGNATURE: ' . $signature;
+        }
+
+        return $headers;
+    }
+
+    function sendIPN(string $url, array $payload, ?string $brandId = null): int {
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
 
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_POST            => true,
             CURLOPT_POSTFIELDS      => $json,
-            CURLOPT_HTTPHEADER      => [
-                'Content-Type: application/json',
-                'Connection: close'
-            ],
+            CURLOPT_HTTPHEADER      => pp_build_ipn_headers($json, $brandId),
             CURLOPT_RETURNTRANSFER  => false,
             CURLOPT_HEADER          => false,
             CURLOPT_CONNECTTIMEOUT  => 3,
@@ -593,15 +1007,13 @@
 
         foreach ($jobs as $job) {
             $json = json_encode($job['payload'], JSON_UNESCAPED_UNICODE);
+            $brandId = isset($job['brand_id']) ? (string)$job['brand_id'] : null;
 
             $ch = curl_init($job['url']);
             curl_setopt_array($ch, [
                 CURLOPT_POST            => true,
                 CURLOPT_POSTFIELDS      => $json,
-                CURLOPT_HTTPHEADER      => [
-                    'Content-Type: application/json',
-                    'Connection: close'
-                ],
+                CURLOPT_HTTPHEADER      => pp_build_ipn_headers($json, $brandId),
                 CURLOPT_RETURNTRANSFER  => false,
                 CURLOPT_CONNECTTIMEOUT  => 3,
                 CURLOPT_TIMEOUT         => 5,
@@ -1696,6 +2108,138 @@
         }
     }
 
+    function pp_is_allowed_transaction_transition(string $fromStatus, string $toStatus): bool
+    {
+        if ($fromStatus === $toStatus) {
+            return true;
+        }
+
+        $matrix = [
+            'initiated' => ['pending', 'completed', 'canceled'],
+            'pending' => ['completed', 'canceled'],
+            'completed' => ['refunded'],
+            'refunded' => [],
+            'canceled' => [],
+        ];
+
+        if (!array_key_exists($fromStatus, $matrix)) {
+            return false;
+        }
+
+        return in_array($toStatus, $matrix[$fromStatus], true);
+    }
+
+    function pp_transition_transaction_status(string $transactionRef, string $targetStatus, array $extraUpdates = [], array $context = []): bool
+    {
+        global $db_prefix;
+
+        $params = [':ref' => $transactionRef];
+        $response = json_decode(getData($db_prefix.'transaction', 'WHERE ref = :ref', '* FROM', $params), true);
+        if (($response['status'] ?? false) !== true) {
+            return false;
+        }
+
+        $transaction = $response['response'][0];
+        $currentStatus = (string)($transaction['status'] ?? '');
+        if (!pp_is_allowed_transaction_transition($currentStatus, $targetStatus)) {
+            error_log('transaction transition blocked: ' . $currentStatus . ' -> ' . $targetStatus . ' for ' . $transactionRef);
+            return false;
+        }
+
+        $columns = ['status', 'updated_date'];
+        $values = [$targetStatus, getCurrentDatetime('Y-m-d H:i:s')];
+
+        foreach ($extraUpdates as $column => $value) {
+            $columns[] = $column;
+            $values[] = $value;
+        }
+
+        $condition = 'id ="'.$transaction['id'].'"';
+        $updated = updateData($db_prefix.'transaction', $columns, $values, $condition);
+        if (!$updated) {
+            return false;
+        }
+
+        pp_sync_fintech_transaction_state($transactionRef, $targetStatus, $context);
+        return true;
+    }
+
+    function pp_sync_fintech_transaction_state(string $transactionRef, string $status, array $context = []): void
+    {
+        global $db_prefix;
+
+        $params = [':ref' => $transactionRef];
+        $transactionResponse = json_decode(getData($db_prefix.'transaction', 'WHERE ref = :ref', '* FROM', $params), true);
+        if (($transactionResponse['status'] ?? false) !== true) {
+            return;
+        }
+
+        $transaction = $transactionResponse['response'][0];
+
+        try {
+            $pdo = connectDatabase();
+
+            $stmt = $pdo->prepare("UPDATE `{$db_prefix}payment_intents` SET status = :status, updated_at = UTC_TIMESTAMP(6) WHERE legacy_transaction_ref = :legacy_transaction_ref");
+            $stmt->execute([
+                ':status' => $status,
+                ':legacy_transaction_ref' => $transactionRef,
+            ]);
+
+            $intentStmt = $pdo->prepare("SELECT id FROM `{$db_prefix}payment_intents` WHERE legacy_transaction_ref = :legacy_transaction_ref LIMIT 1");
+            $intentStmt->execute([':legacy_transaction_ref' => $transactionRef]);
+            $intent = $intentStmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($intent && !empty($intent['id'])) {
+                $attemptStmt = $pdo->prepare(
+                    "INSERT INTO `{$db_prefix}payment_attempts` (
+                        intent_id, gateway_id, attempt_no, status, provider_ref, request_payload, response_payload, created_at, updated_at
+                    ) VALUES (
+                        :intent_id, :gateway_id, :attempt_no, :status, :provider_ref, :request_payload, :response_payload, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+                    )"
+                );
+                $attemptStmt->execute([
+                    ':intent_id' => (int)$intent['id'],
+                    ':gateway_id' => $context['gateway_id'] ?? ($transaction['gateway_id'] ?? null),
+                    ':attempt_no' => (int)($context['attempt_no'] ?? 1),
+                    ':status' => $status,
+                    ':provider_ref' => $context['provider_ref'] ?? ($transaction['trx_id'] ?? null),
+                    ':request_payload' => null,
+                    ':response_payload' => null,
+                ]);
+            }
+        } catch (Throwable $e) {
+            error_log('fintech state sync warning: ' . $e->getMessage());
+        }
+
+        try {
+            if (in_array($status, ['completed', 'refunded'], true)) {
+                pp_get_ledger_service()->postForTransaction($transaction, $status);
+            }
+        } catch (Throwable $e) {
+            error_log('ledger state sync warning: ' . $e->getMessage());
+        }
+
+        try {
+            pp_get_audit_logger()->log(
+                (string)($context['actor_type'] ?? 'system'),
+                (string)($context['actor_id'] ?? ($transaction['brand_id'] ?? 'system')),
+                'transaction_state_synced',
+                'transaction',
+                $transactionRef,
+                null,
+                [
+                    'status' => $status,
+                    'gateway_id' => $context['gateway_id'] ?? ($transaction['gateway_id'] ?? null),
+                    'provider_ref' => $context['provider_ref'] ?? ($transaction['trx_id'] ?? null),
+                ],
+                $_SERVER['HTTP_USER_AGENT'] ?? null,
+                $_SERVER['REMOTE_ADDR'] ?? null
+            );
+        } catch (Throwable $e) {
+            error_log('audit sync warning: ' . $e->getMessage());
+        }
+    }
+
     function pp_set_transaction_status($transactionid, $status = '', $gateway_id = '', $trxid = '', $source_info = []){
         global $db_prefix;
 
@@ -1705,11 +2249,30 @@
 
         if ($response_transaciton['status'] === true) {
             if($status == "canceled"){
-                $columns = ['status', 'updated_date'];
-                $values = ['canceled', getCurrentDatetime('Y-m-d H:i:s')];
-                $condition = 'id ="'.$response_transaciton['response'][0]['id'].'"'; 
+                $before = $response_transaciton['response'][0];
+                $transitioned = pp_transition_transaction_status((string)$response_transaciton['response'][0]['ref'], 'canceled', [], [
+                    'actor_type' => 'system',
+                    'actor_id' => (string)$response_transaciton['response'][0]['brand_id'],
+                ]);
+                if (!$transitioned) {
+                    return false;
+                }
 
-                updateData($db_prefix.'transaction', $columns, $values, $condition);
+                try {
+                    pp_get_audit_logger()->log(
+                        'system',
+                        (string)$response_transaciton['response'][0]['brand_id'],
+                        'transaction_canceled',
+                        'transaction',
+                        (string)$response_transaciton['response'][0]['ref'],
+                        $before,
+                        array_merge($before, ['status' => 'canceled']),
+                        $_SERVER['HTTP_USER_AGENT'] ?? null,
+                        $_SERVER['REMOTE_ADDR'] ?? null
+                    );
+                } catch (Throwable $e) {
+                    error_log('audit log error: ' . $e->getMessage());
+                }
                                                                 
                 return true;
             }
@@ -1786,11 +2349,23 @@
                     return false;
                 }
 
-                $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'status', 'trx_id', 'source_info', 'updated_date'];
-                $values = [$totalProcessingFee, $totalDiscount, $convertedAmount, $response_gateway['response'][0]['currency'], $gateway_id, 'completed', $trxid, $final_source_info, getCurrentDatetime('Y-m-d H:i:s')];
-                $condition = 'id ="'.$response_transaciton['response'][0]['id'].'"'; 
-
-                updateData($db_prefix.'transaction', $columns, $values, $condition);
+                $transitioned = pp_transition_transaction_status((string)$response_transaciton['response'][0]['ref'], 'completed', [
+                    'processing_fee' => $totalProcessingFee,
+                    'discount_amount' => $totalDiscount,
+                    'local_net_amount' => $convertedAmount,
+                    'local_currency' => $response_gateway['response'][0]['currency'],
+                    'gateway_id' => $gateway_id,
+                    'trx_id' => $trxid,
+                    'source_info' => $final_source_info,
+                ], [
+                    'actor_type' => 'system',
+                    'actor_id' => (string)$response_transaciton['response'][0]['brand_id'],
+                    'gateway_id' => (string)$gateway_id,
+                    'provider_ref' => (string)$trxid,
+                ]);
+                if (!$transitioned) {
+                    return false;
+                }
 
                 $params = [ ':ref' => $response_transaciton['response'][0]['ref'], ':status' => 'completed' ];
 
@@ -1830,6 +2405,26 @@
                     "date" => convertUTCtoUserTZ($response_transaction['response'][0]['created_date'], ($response_brand['response'][0]['timezone'] === '--' || $response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $response_brand['response'][0]['timezone'], "M d, Y h:i A")
                 ];
 
+                try {
+                    pp_get_audit_logger()->log(
+                        'system',
+                        (string)$response_transaction['response'][0]['brand_id'],
+                        'transaction_completed',
+                        'transaction',
+                        (string)$response_transaction['response'][0]['ref'],
+                        null,
+                        [
+                            'status' => (string)$response_transaction['response'][0]['status'],
+                            'gateway_id' => (string)$gateway_id,
+                            'trx_id' => (string)$trxid,
+                        ],
+                        $_SERVER['HTTP_USER_AGENT'] ?? null,
+                        $_SERVER['REMOTE_ADDR'] ?? null
+                    );
+                } catch (Throwable $e) {
+                    error_log('audit log error: ' . $e->getMessage());
+                }
+
                 if($response_transaction['response'][0]['webhook_url'] == "" || $response_transaction['response'][0]['webhook_url'] == "--"){
 
                 }else{
@@ -1857,6 +2452,7 @@
 
                     $jobs = [[
                         'id'      => rand(),
+                        'brand_id'=> $response_brand['response'][0]['brand_id'],
                         'url'     => $response_transaction['response'][0]['webhook_url'],
                         'payload' => json_decode($payload, true),
                     ]];

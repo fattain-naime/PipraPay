@@ -5216,15 +5216,62 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     $apiExpiryDate = "--";
                                 }
 
-                                $api_key = bin2hex(random_bytes(25));
-                                $scopes_json = json_encode($scopes);
+                                $rawApiKey = bin2hex(random_bytes(25));
+                                $scopes_json = json_encode($scopes, JSON_UNESCAPED_UNICODE);
+                                $nowDate = getCurrentDatetime('Y-m-d H:i:s');
 
-                                $columns = ['brand_id', 'name', 'api_key', 'expired_date', 'status', 'api_scopes', 'created_date', 'updated_date'];
-                                $values = [$global_response_brand['response'][0]['brand_id'], $api_name, $api_key, $apiExpiryDate, $api_status, $scopes_json, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
+                                $pdo = connectDatabase();
+                                try {
+                                    $pdo->beginTransaction();
 
-                                insertData($db_prefix.'api', $columns, $values);
+                                    $stmt = $pdo->prepare(
+                                        "INSERT INTO `{$db_prefix}api` (brand_id, name, api_key, expired_date, status, api_scopes, created_date, updated_date, created_at, updated_at)
+                                         VALUES (:brand_id, :name, :api_key, :expired_date, :status, :api_scopes, :created_date, :updated_date, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))"
+                                    );
+                                    $stmt->execute([
+                                        ':brand_id' => $global_response_brand['response'][0]['brand_id'],
+                                        ':name' => $api_name,
+                                        ':api_key' => $rawApiKey,
+                                        ':expired_date' => $apiExpiryDate,
+                                        ':status' => $api_status,
+                                        ':api_scopes' => $scopes_json,
+                                        ':created_date' => $nowDate,
+                                        ':updated_date' => $nowDate,
+                                    ]);
 
-                                echo json_encode(['status' => 'true', 'title' => 'Api Created', 'message' => 'The api has been created successfully.', 'csrf_token' => $new_csrf_token]);
+                                    $apiId = (int)$pdo->lastInsertId();
+                                    $apiKeyRepo = new ApiKeyRepository($pdo);
+                                    $apiKeyRepo->createHashedKey(
+                                        $apiId,
+                                        $global_response_brand['response'][0]['brand_id'],
+                                        $api_name,
+                                        $rawApiKey,
+                                        is_array($scopes) ? $scopes : [],
+                                        pp_parse_expired_date_to_datetime($apiExpiryDate),
+                                        $api_status
+                                    );
+
+                                    $pdo->commit();
+                                } catch (Throwable $e) {
+                                    if ($pdo->inTransaction()) {
+                                        $pdo->rollBack();
+                                    }
+                                    echo json_encode([
+                                        'status' => 'false',
+                                        'title' => 'Api Creation Failed',
+                                        'message' => 'Failed to create API key. Please try again.',
+                                        'csrf_token' => $new_csrf_token
+                                    ]);
+                                    exit();
+                                }
+
+                                echo json_encode([
+                                    'status' => 'true',
+                                    'title' => 'Api Created',
+                                    'message' => 'The api has been created successfully. You can copy this key from the API list anytime.',
+                                    'api_key' => $rawApiKey,
+                                    'csrf_token' => $new_csrf_token
+                                ]);
                             }
                         }
                     }
@@ -5302,10 +5349,15 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 }
                             }
 
+                            $storedApiKey = trim((string)($row['api_key'] ?? ''));
+                            if ($storedApiKey === '' || $storedApiKey === '--') {
+                                $storedApiKey = pp_get_api_key_repository()->getMaskedKeyByApiId((int)$row['id']) ?? '--';
+                            }
+
                             $response[] = [
                                 "id"    => $row['id'],
                                 "name"  => $row['name'],
-                                "api_key"  => $row['api_key'],
+                                "api_key"  => $storedApiKey,
                                 "expired_date"  => $row['expired_date'],
                                 "status"  => $status,
                                 "created_date"     => convertUTCtoUserTZ($row['created_date'], ($global_response_brand['response'][0]['timezone'] === '--' || $global_response_brand['response'][0]['timezone'] === '') ? 'Asia/Dhaka' : $global_response_brand['response'][0]['timezone'], "M d, Y h:i A"),
@@ -5414,6 +5466,27 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         $actionID = escape_string($_POST['actionID'] ?? '');
                         $selected_ids_json = $_POST['selected_ids'] ?? '[]';
                         $selected_ids = json_decode($selected_ids_json, true);
+                        $deletedCount = 0;
+                        $deletedHashRows = 0;
+                        $deleteFailures = [];
+                        $deleteFailureReasonMap = [
+                            'schema_not_ready' => 'Fintech schema tables are not ready.',
+                            'not_found' => 'API key not found for this brand.',
+                            'delete_failed' => 'Delete query did not affect any row.',
+                            'orphan_detected' => 'Hashed key cleanup verification failed.',
+                            'exception' => 'Database exception occurred during delete.',
+                            'invalid_input' => 'Invalid delete input.',
+                        ];
+
+                        if ($actionID == "deleted" && !hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'api_settings', 'delete', $global_user_response['response'][0]['role'])) {
+                            echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need delete permission to perform this action.', 'csrf_token' => $new_csrf_token]);
+                            exit();
+                        }
+
+                        if (in_array($actionID, ['activated', 'inactivated'], true) && !hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'api_settings', 'edit', $global_user_response['response'][0]['role'])) {
+                            echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need edit permission to perform this action.', 'csrf_token' => $new_csrf_token]);
+                            exit();
+                        }
 
                         if (!empty($selected_ids)) {
                             foreach ($selected_ids as $id) {
@@ -5423,10 +5496,26 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 if($response_brand['status'] == true){
                                     if($actionID == "deleted"){
                                         if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'api_settings', 'delete', $global_user_response['response'][0]['role'])) {
-                                        
-                                            $condition = "id = '".$itemID."'"; 
-                                            
-                                            deleteData($db_prefix.'api', $condition);
+                                            $deleteResult = pp_delete_api_credential(
+                                                (int)$itemID,
+                                                (string)$global_response_brand['response'][0]['brand_id'],
+                                                [
+                                                    'actor_type' => 'admin',
+                                                    'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                ]
+                                            );
+
+                                            if (($deleteResult['status'] ?? false) === true) {
+                                                $deletedCount++;
+                                                $deletedHashRows += (int)($deleteResult['hash_rows_deleted'] ?? 0);
+                                            } else {
+                                                $reason = (string)($deleteResult['reason'] ?? 'unknown');
+                                                $reasonText = $deleteFailureReasonMap[$reason] ?? 'Unknown delete guard failure.';
+                                                if ($reason === 'exception' && !empty($deleteResult['error'])) {
+                                                    $reasonText .= ' (' . (string)$deleteResult['error'] . ')';
+                                                }
+                                                $deleteFailures[] = (string)$itemID.' ('.$reasonText.')';
+                                            }
 
                                         }
                                     }
@@ -5439,6 +5528,13 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             $condition = "id = '".$itemID."'"; 
                                             
                                             updateData($db_prefix.'api', $columns, $values, $condition);
+                                            try {
+                                                $pdo = connectDatabase();
+                                                $stmt = $pdo->prepare("UPDATE `{$db_prefix}api_keys` SET status = 'active', updated_at = UTC_TIMESTAMP(6) WHERE api_id = :api_id");
+                                                $stmt->execute([':api_id' => (int)$itemID]);
+                                            } catch (Throwable $e) {
+                                                error_log('api key status sync failed: ' . $e->getMessage());
+                                            }
 
                                         }
                                     }
@@ -5451,10 +5547,37 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             $condition = "id = '".$itemID."'"; 
                                             
                                             updateData($db_prefix.'api', $columns, $values, $condition);
+                                            try {
+                                                $pdo = connectDatabase();
+                                                $stmt = $pdo->prepare("UPDATE `{$db_prefix}api_keys` SET status = 'inactive', updated_at = UTC_TIMESTAMP(6) WHERE api_id = :api_id");
+                                                $stmt->execute([':api_id' => (int)$itemID]);
+                                            } catch (Throwable $e) {
+                                                error_log('api key status sync failed: ' . $e->getMessage());
+                                            }
 
                                         }
                                     }
                                 }
+                            }
+
+                            if ($actionID == "deleted" && !empty($deleteFailures)) {
+                                echo json_encode([
+                                    'status' => 'false',
+                                    'title' => 'Api Key Delete Failed',
+                                    'message' => 'Some API keys could not be deleted. Failed IDs: '.implode(', ', $deleteFailures),
+                                    'csrf_token' => $new_csrf_token
+                                ]);
+                                exit();
+                            }
+
+                            if ($actionID == "deleted") {
+                                echo json_encode([
+                                    'status' => 'true',
+                                    'title' => 'Api Key Deleted',
+                                    'message' => "Deleted {$deletedCount} API keys and removed {$deletedHashRows} hashed-key rows with orphan check passed.",
+                                    'csrf_token' => $new_csrf_token
+                                ]);
+                                exit();
                             }
 
                             echo json_encode(['status' => 'true', 'title' => 'Api Key '.$actionID, 'message' => 'The selected api key have been '.$actionID.' successfully.', 'csrf_token' => $new_csrf_token]);
@@ -5488,15 +5611,38 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         }
 
                         $ItemID = escape_string($_POST['ItemID'] ?? '');
+                        $deleteFailureReasonMap = [
+                            'schema_not_ready' => 'Fintech schema tables are not ready.',
+                            'not_found' => 'API key not found for this brand.',
+                            'delete_failed' => 'Delete query did not affect any row.',
+                            'orphan_detected' => 'Hashed key cleanup verification failed.',
+                            'exception' => 'Database exception occurred during delete.',
+                            'invalid_input' => 'Invalid delete input.',
+                        ];
 
                         $response_brand = json_decode(getData($db_prefix.'api','WHERE id = "'.$ItemID.'" AND brand_id ="'.$global_response_brand['response'][0]['brand_id'].'" '),true);
                         if($response_brand['status'] == true){
-                            $condition = "id = '".$ItemID."'"; 
-                            
-                            deleteData($db_prefix.'api', $condition);
+                            $deleteResult = pp_delete_api_credential(
+                                (int)$ItemID,
+                                (string)$global_response_brand['response'][0]['brand_id'],
+                                [
+                                    'actor_type' => 'admin',
+                                    'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                ]
+                            );
+
+                            if (($deleteResult['status'] ?? false) !== true) {
+                                $reason = (string)($deleteResult['reason'] ?? 'unknown');
+                                $reasonText = $deleteFailureReasonMap[$reason] ?? 'Unknown delete guard failure.';
+                                if ($reason === 'exception' && !empty($deleteResult['error'])) {
+                                    $reasonText .= ' (' . (string)$deleteResult['error'] . ')';
+                                }
+                                echo json_encode(['status' => 'false', 'title' => 'Api Key Delete Failed', 'message' => 'Delete blocked: '.$reasonText , 'csrf_token' => $new_csrf_token]);
+                                exit();
+                            }
                         }
 
-                        echo json_encode(['status' => 'true', 'title' => 'Api Key Deleted', 'message' => 'The selected api key have been deleted successfully.', 'csrf_token' => $new_csrf_token]);
+                        echo json_encode(['status' => 'true', 'title' => 'Api Key Deleted', 'message' => 'The selected api key have been deleted successfully with orphan verification.', 'csrf_token' => $new_csrf_token]);
                     }
                 }else{
                     echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
@@ -5565,11 +5711,105 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 
                                 updateData($db_prefix.'api', $columns, $values, $condition);
 
+                                try {
+                                    pp_get_api_key_repository()->updateByApiId(
+                                        (int)$api_id,
+                                        $api_name,
+                                        is_array($scopes) ? $scopes : [],
+                                        pp_parse_expired_date_to_datetime($apiExpiryDate),
+                                        $api_status
+                                    );
+                                } catch (Throwable $e) {
+                                    error_log('api key hash sync failed: ' . $e->getMessage());
+                                }
+
                                 echo json_encode(['status' => 'true', 'title' => 'Api Updated', 'message' => 'The api has been updated successfully.', 'csrf_token' => $new_csrf_token]);
                             }else{
                                 echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
                             }
                         }
+                    }
+                }else{
+                    echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
+                }
+            }
+
+            if($action == "invoice-webhook-security-save"){
+                if($global_user_login == true){
+                    if (!empty($pp_demo_mode)) {
+                        echo json_encode(['status' => "false", 'title' => 'Demo Restriction', 'message' => 'This feature is disabled in the demo version.', 'csrf_token' => $new_csrf_token]);
+                    }else{
+                        if (!canAccessPage(json_decode($global_response_permission['response'][0]['permission'], true), 'brand_settings', $global_user_response['response'][0]['role'])) {
+                            echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.' , 'csrf_token' => $new_csrf_token]);
+                            exit();
+                        }
+
+                        if (!hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'api_settings', 'view', $global_user_response['response'][0]['role'])) {
+                            echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.' , 'csrf_token' => $new_csrf_token]);
+                            exit();
+                        }
+
+                        if (!hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'api_settings', 'edit', $global_user_response['response'][0]['role'])) {
+                            echo json_encode(['status' => 'false', 'title' => 'Access denied', 'message' => 'You need permission to perform this action. Please contact the admin.' , 'csrf_token' => $new_csrf_token]);
+                            exit();
+                        }
+
+                        $secret = trim((string)($_POST['secret'] ?? ''));
+                        $signatureRequired = pp_bool_from_env_value($_POST['signature_required'] ?? '1');
+                        $timestampRequired = pp_bool_from_env_value($_POST['timestamp_required'] ?? '1');
+                        $maxAgeSeconds = pp_normalize_positive_int($_POST['max_age_seconds'] ?? '300', 300, 30, 86400);
+                        $clockSkewSeconds = pp_normalize_positive_int($_POST['clock_skew_seconds'] ?? '60', 60, 0, 900);
+
+                        if ($signatureRequired && $secret === '') {
+                            echo json_encode([
+                                'status' => 'false',
+                                'title' => 'Secret Required',
+                                'message' => 'Set invoice-webhook-secret when signature verification is enabled.',
+                                'csrf_token' => $new_csrf_token
+                            ]);
+                            exit();
+                        }
+
+                        if ($secret !== '' && strlen($secret) < 16) {
+                            echo json_encode([
+                                'status' => 'false',
+                                'title' => 'Weak Secret',
+                                'message' => 'Webhook secret must be at least 16 characters.',
+                                'csrf_token' => $new_csrf_token
+                            ]);
+                            exit();
+                        }
+
+                        if ($secret !== '' && strlen($secret) > 255) {
+                            echo json_encode([
+                                'status' => 'false',
+                                'title' => 'Secret Too Long',
+                                'message' => 'Webhook secret must be 255 characters or less.',
+                                'csrf_token' => $new_csrf_token
+                            ]);
+                            exit();
+                        }
+
+                        $brandId = (string)$global_response_brand['response'][0]['brand_id'];
+
+                        set_env('invoice-webhook-secret', $secret, $brandId);
+                        set_env('invoice-webhook-signature-required', $signatureRequired ? '1' : '0', $brandId);
+                        set_env('invoice-webhook-enforce-timestamp', $timestampRequired ? '1' : '0', $brandId);
+                        set_env('invoice-webhook-max-age-seconds', (string)$maxAgeSeconds, $brandId);
+                        set_env('invoice-webhook-clock-skew-seconds', (string)$clockSkewSeconds, $brandId);
+
+                        echo json_encode([
+                            'status' => 'true',
+                            'title' => 'Webhook Security Updated',
+                            'message' => 'Invoice webhook security settings have been saved successfully.',
+                            'config' => [
+                                'signature_required' => $signatureRequired ? '1' : '0',
+                                'timestamp_required' => $timestampRequired ? '1' : '0',
+                                'max_age_seconds' => $maxAgeSeconds,
+                                'clock_skew_seconds' => $clockSkewSeconds
+                            ],
+                            'csrf_token' => $new_csrf_token
+                        ]);
                     }
                 }else{
                     echo json_encode(['status' => 'false', 'title' => 'Request Failed', 'message' => 'Invalid request' , 'csrf_token' => $new_csrf_token]);
@@ -7118,6 +7358,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $all_transactions = [];
 
                             $jobs = [];
+                            $blockedTransitionRefs = [];
 
                             foreach ($selected_ids as $id) {
                                 $itemID = escape_string($id);
@@ -7134,34 +7375,43 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                     if($actionID == "approved"){
                                         if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'transaction', 'approve', $global_user_response['response'][0]['role'])) {
-                                            $columns = ['status', 'updated_date'];
-                                            $values = ['completed', getCurrentDatetime('Y-m-d H:i:s')];
-
-                                            $condition = "ref = '".$itemID."'"; 
-                                            
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                            $transitioned = pp_transition_transaction_status((string)$itemID, 'completed', [], [
+                                                'actor_type' => 'admin',
+                                                'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                'gateway_id' => (string)($response_brand['response'][0]['gateway_id'] ?? '--'),
+                                                'provider_ref' => (string)($response_brand['response'][0]['trx_id'] ?? ''),
+                                            ]);
+                                            if (!$transitioned) {
+                                                $blockedTransitionRefs[] = (string)$itemID;
+                                            }
                                         }
                                     }
 
                                     if($actionID == "refunded"){
                                         if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'transaction', 'refund', $global_user_response['response'][0]['role'])) {
-                                            $columns = ['status', 'updated_date'];
-                                            $values = ['refunded', getCurrentDatetime('Y-m-d H:i:s')];
-
-                                            $condition = "ref = '".$itemID."'"; 
-                                            
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                            $transitioned = pp_transition_transaction_status((string)$itemID, 'refunded', [], [
+                                                'actor_type' => 'admin',
+                                                'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                'gateway_id' => (string)($response_brand['response'][0]['gateway_id'] ?? '--'),
+                                                'provider_ref' => (string)($response_brand['response'][0]['trx_id'] ?? ''),
+                                            ]);
+                                            if (!$transitioned) {
+                                                $blockedTransitionRefs[] = (string)$itemID;
+                                            }
                                         }
                                     }
 
                                     if($actionID == "canceled"){
                                         if (hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'transaction', 'cancel', $global_user_response['response'][0]['role'])) {
-                                            $columns = ['status', 'updated_date'];
-                                            $values = ['canceled', getCurrentDatetime('Y-m-d H:i:s')];
-
-                                            $condition = "ref = '".$itemID."'"; 
-                                            
-                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                            $transitioned = pp_transition_transaction_status((string)$itemID, 'canceled', [], [
+                                                'actor_type' => 'admin',
+                                                'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                'gateway_id' => (string)($response_brand['response'][0]['gateway_id'] ?? '--'),
+                                                'provider_ref' => (string)($response_brand['response'][0]['trx_id'] ?? ''),
+                                            ]);
+                                            if (!$transitioned) {
+                                                $blockedTransitionRefs[] = (string)$itemID;
+                                            }
                                         }
                                     }
 
@@ -7206,6 +7456,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                 
                                                 $jobs[] = [
                                                     'id'      => rand(),
+                                                    'brand_id'=> $response_brand['response'][0]['brand_id'],
                                                     'url'     => $response_brand['response'][0]['webhook_url'],
                                                     'payload' => json_decode($payload, true),
                                                 ];
@@ -7261,6 +7512,16 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                     insertData($db_prefix.'webhook_log', $columns, $values);
                                 }
+                            }
+
+                            if (in_array($actionID, ['approved', 'refunded', 'canceled'], true) && !empty($blockedTransitionRefs)) {
+                                echo json_encode([
+                                    'status' => "false",
+                                    'title' => 'Invalid State Transition',
+                                    'message' => 'Some transactions were blocked by the state machine: '.implode(', ', array_unique($blockedTransitionRefs)),
+                                    'csrf_token' => $new_csrf_token
+                                ]);
+                                exit();
                             }
 
                             if (!empty($all_transactions)) {
@@ -7359,7 +7620,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             if($response_brand['response'][0]['webhook_url'] == "--" || $response_brand['response'][0]['webhook_url'] == ""){
 
                             }else{
-                                sendIPN($response_brand['response'][0]['webhook_url'], $ipnData);
+                                sendIPN($response_brand['response'][0]['webhook_url'], $ipnData, (string)$response_brand['response'][0]['brand_id']);
                             }
                         }
 
@@ -8720,13 +8981,28 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $return_url = $site_url.$path_invoice.'/'.$itemid;
                             $webhook_url= $site_url.$path_invoice.'/webhook';
 
-                            $payment_id = generateItemID(27, 27);
+                            try {
+                                $paymentInit = pp_initiate_payment([
+                                    'brand_id' => $invoiceRow['brand_id'],
+                                    'source' => 'invoice',
+                                    'amount' => money_sanitize($amount),
+                                    'currency' => $currency,
+                                    'customer' => [
+                                        'name' => $customer_name,
+                                        'email' => $customer_email,
+                                        'mobile' => $customer_mobile,
+                                    ],
+                                    'source_info' => json_decode($source_info, true),
+                                    'metadata' => json_decode($metadata, true),
+                                    'return_url' => $return_url,
+                                    'webhook_url' => $webhook_url,
+                                ]);
+                            } catch (Throwable $e) {
+                                echo json_encode(['status' => "false", 'title' => 'Payment Init Failed', 'message' => 'Unable to generate payment link right now.']);
+                                exit();
+                            }
 
-                            $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'source_info', 'metadata', 'return_url', 'webhook_url', 'created_date', 'updated_date'];
-                            $values = [$invoiceRow['brand_id'], 'invoice', $payment_id, '{ "name": "'.$customer_name.'", "email": "'.$customer_email.'", "mobile": "'.$customer_mobile.'" }', money_sanitize($amount), $currency, $source_info, $metadata, $return_url, $webhook_url, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                            insertData($db_prefix.'transaction', $columns, $values);
-
+                            $payment_id = $paymentInit['payment_id'];
                             echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$payment_id]);
                         }else{
                             echo json_encode(['status' => "false", 'title' => 'Invalid Invoice ID', 'message' => 'Please fill in all required fields before proceeding.']);
@@ -8849,13 +9125,26 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                             $currency = $paymentRow['currency'];
 
-                            $payment_id = generateItemID(27, 27);
+                            try {
+                                $paymentInit = pp_initiate_payment([
+                                    'brand_id' => $paymentRow['brand_id'],
+                                    'source' => 'payment-link',
+                                    'amount' => money_sanitize($paymentRow['amount']),
+                                    'currency' => $currency,
+                                    'customer' => [
+                                        'name' => $customer_name,
+                                        'email' => $customer_email,
+                                        'mobile' => $customer_mobile,
+                                    ],
+                                    'source_info' => json_decode($source_info, true),
+                                    'metadata' => json_decode($metadata, true),
+                                ]);
+                            } catch (Throwable $e) {
+                                echo json_encode(['status' => "false", 'title' => 'Payment Init Failed', 'message' => 'Unable to generate payment link right now.']);
+                                exit();
+                            }
 
-                            $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'source_info', 'metadata', 'created_date', 'updated_date'];
-                            $values = [$paymentRow['brand_id'], 'payment-link', $payment_id, '{ "name": "'.$customer_name.'", "email": "'.$customer_email.'", "mobile": "'.$customer_mobile.'" }', money_sanitize($paymentRow['amount']), $currency, $source_info, $metadata, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                            insertData($db_prefix.'transaction', $columns, $values);
-
+                            $payment_id = $paymentInit['payment_id'];
                             echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$payment_id]);
                         }else{
                             echo json_encode(['status' => "false", 'title' => 'Invalid Payment Link ID', 'message' => 'Please fill in all required fields before proceeding.']);
@@ -8888,13 +9177,25 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                             $amount = trim($_POST['amount'] ?? '');
                             $currency = (($v = get_env('payment-link-default-currency', $response_brand['response'][0]['brand_id'])) && $v !== '--') ? $v : $brandRow['currency_code'];
 
-                            $payment_id = generateItemID(27, 27);
+                            try {
+                                $paymentInit = pp_initiate_payment([
+                                    'brand_id' => $brandRow['brand_id'],
+                                    'source' => 'payment-link-default',
+                                    'amount' => money_sanitize($amount),
+                                    'currency' => $currency,
+                                    'customer' => [
+                                        'name' => $customer_name,
+                                        'email' => $customer_email,
+                                        'mobile' => $customer_mobile,
+                                    ],
+                                    'metadata' => json_decode($metadata, true),
+                                ]);
+                            } catch (Throwable $e) {
+                                echo json_encode(['status' => "false", 'title' => 'Payment Init Failed', 'message' => 'Unable to generate payment link right now.']);
+                                exit();
+                            }
 
-                            $columns = ['brand_id', 'source', 'ref', 'customer_info', 'amount', 'currency', 'created_date', 'updated_date'];
-                            $values = [$brandRow['brand_id'], 'payment-link-default', $payment_id, '{ "name": "'.$customer_name.'", "email": "'.$customer_email.'", "mobile": "'.$customer_mobile.'" }', money_sanitize($amount), $currency, getCurrentDatetime('Y-m-d H:i:s'), getCurrentDatetime('Y-m-d H:i:s')];
-
-                            insertData($db_prefix.'transaction', $columns, $values);
-
+                            $payment_id = $paymentInit['payment_id'];
                             echo json_encode(['status' => "true", 'redirect' => $site_url.$path_payment.'/'.$payment_id]);
                         }else{
                             echo json_encode(['status' => "false", 'title' => 'Invalid Payment Link ID', 'message' => 'Please fill in all required fields before proceeding.']);
@@ -9039,11 +9340,25 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                                 
                                                                 updateData($db_prefix.'sms_data', $columns, $values, $condition);
 
-                                                                $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'sender_key',  'status', 'sender', 'trx_id', 'updated_date'];
-                                                                $values = [money_sanitize($totalProcessingFee), money_sanitize($totalDiscount), money_sanitize($convertedAmount), $response_gateway['response'][0]['currency'], $gateway_id, $gateway_info['sender_key'], 'completed', $response_pending_SMSTransaction['response'][0]['number'], $trxid, getCurrentDatetime('Y-m-d H:i:s')];
-                                                                $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
-
-                                                                updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                                                $transitioned = pp_transition_transaction_status((string)$transaction_id, 'completed', [
+                                                                    'processing_fee' => money_sanitize($totalProcessingFee),
+                                                                    'discount_amount' => money_sanitize($totalDiscount),
+                                                                    'local_net_amount' => money_sanitize($convertedAmount),
+                                                                    'local_currency' => $response_gateway['response'][0]['currency'],
+                                                                    'gateway_id' => $gateway_id,
+                                                                    'sender_key' => $gateway_info['sender_key'],
+                                                                    'sender' => $response_pending_SMSTransaction['response'][0]['number'],
+                                                                    'trx_id' => $trxid,
+                                                                ], [
+                                                                    'actor_type' => 'admin',
+                                                                    'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                                    'gateway_id' => (string)$gateway_id,
+                                                                    'provider_ref' => (string)$trxid,
+                                                                ]);
+                                                                if (!$transitioned) {
+                                                                    echo json_encode(['status' => "false", 'title' => 'Invalid State', 'message' => 'Transaction state transition is not allowed.']);
+                                                                    exit();
+                                                                }
 
                                                                 $params = [ ':ref' => $transaction_id, ':status' => 'completed' ];
 
@@ -9104,6 +9419,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
 
                                                                     $jobs = [[
                                                                         'id'      => rand(),
+                                                                        'brand_id'=> $response_brand['response'][0]['brand_id'],
                                                                         'url'     => $response_transaction['response'][0]['webhook_url'],
                                                                         'payload' => json_decode($payload, true),
                                                                     ]];
@@ -9137,11 +9453,25 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                           if($mobile_number == ""){
                                                               echo json_encode(['status' => "false", 'title' => 'Transaction Not Matched', 'message' => 'The Transaction ID you entered could not be verified. Please try again after some time, or enter your phone number and submit for manual approval.', 'visible_number' => "true"]);
                                                           }else{
-                                                                $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'sender_key',  'status', 'sender', 'trx_id', 'updated_date'];
-                                                                $values = [money_sanitize($totalProcessingFee), money_sanitize($totalDiscount), money_sanitize($convertedAmount), $response_gateway['response'][0]['currency'], $gateway_id, $gateway_info['sender_key'], 'pending', $mobile_number, $trxid, getCurrentDatetime('Y-m-d H:i:s')];
-                                                                $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
-
-                                                                updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                                                $transitioned = pp_transition_transaction_status((string)$transaction_id, 'pending', [
+                                                                    'processing_fee' => money_sanitize($totalProcessingFee),
+                                                                    'discount_amount' => money_sanitize($totalDiscount),
+                                                                    'local_net_amount' => money_sanitize($convertedAmount),
+                                                                    'local_currency' => $response_gateway['response'][0]['currency'],
+                                                                    'gateway_id' => $gateway_id,
+                                                                    'sender_key' => $gateway_info['sender_key'],
+                                                                    'sender' => $mobile_number,
+                                                                    'trx_id' => $trxid,
+                                                                ], [
+                                                                    'actor_type' => 'admin',
+                                                                    'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                                    'gateway_id' => (string)$gateway_id,
+                                                                    'provider_ref' => (string)$trxid,
+                                                                ]);
+                                                                if (!$transitioned) {
+                                                                    echo json_encode(['status' => "false", 'title' => 'Invalid State', 'message' => 'Transaction state transition is not allowed.']);
+                                                                    exit();
+                                                                }
                                                                 echo json_encode([ 'status' => "true", 'title' => 'Transaction Submitted', 'message' => 'Your Transaction ID has been successfully submitted' ]);
                                                           }
                                                        }else{
@@ -9166,11 +9496,23 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                     }else{
                                                         $response_brand = json_decode(getData($db_prefix.'brands',' WHERE brand_id ="'.$response_transaction['response'][0]['brand_id'].'"'),true);
                                                         if($response_brand['status'] == true){
-                                                            $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'status', 'trx_id', 'updated_date'];
-                                                            $values = [money_sanitize($totalProcessingFee), money_sanitize($totalDiscount), money_sanitize($convertedAmount), $response_gateway['response'][0]['currency'], $gateway_id, 'pending', $trxid, getCurrentDatetime('Y-m-d H:i:s')];
-                                                            $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
-
-                                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                                            $transitioned = pp_transition_transaction_status((string)$transaction_id, 'pending', [
+                                                                'processing_fee' => money_sanitize($totalProcessingFee),
+                                                                'discount_amount' => money_sanitize($totalDiscount),
+                                                                'local_net_amount' => money_sanitize($convertedAmount),
+                                                                'local_currency' => $response_gateway['response'][0]['currency'],
+                                                                'gateway_id' => $gateway_id,
+                                                                'trx_id' => $trxid,
+                                                            ], [
+                                                                'actor_type' => 'admin',
+                                                                'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                                'gateway_id' => (string)$gateway_id,
+                                                                'provider_ref' => (string)$trxid,
+                                                            ]);
+                                                            if (!$transitioned) {
+                                                                echo json_encode(['status' => "false", 'title' => 'Invalid State', 'message' => 'Transaction state transition is not allowed.']);
+                                                                exit();
+                                                            }
 
                                                             $params = [ ':ref' => $transaction_id, ':status' => 'pending' ];
 
@@ -9227,11 +9569,22 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                                                 exit();
                                                             }
 
-                                                            $columns = ['processing_fee', 'discount_amount', 'local_net_amount', 'local_currency', 'gateway_id', 'status', 'trx_slip', 'updated_date'];
-                                                            $values = [money_sanitize($totalProcessingFee), money_sanitize($totalDiscount), money_sanitize($convertedAmount), $response_gateway['response'][0]['currency'], $gateway_id, 'pending', $trx_slip, getCurrentDatetime('Y-m-d H:i:s')];
-                                                            $condition = 'id ="'.$response_transaction['response'][0]['id'].'"'; 
-
-                                                            updateData($db_prefix.'transaction', $columns, $values, $condition);
+                                                            $transitioned = pp_transition_transaction_status((string)$transaction_id, 'pending', [
+                                                                'processing_fee' => money_sanitize($totalProcessingFee),
+                                                                'discount_amount' => money_sanitize($totalDiscount),
+                                                                'local_net_amount' => money_sanitize($convertedAmount),
+                                                                'local_currency' => $response_gateway['response'][0]['currency'],
+                                                                'gateway_id' => $gateway_id,
+                                                                'trx_slip' => $trx_slip,
+                                                            ], [
+                                                                'actor_type' => 'admin',
+                                                                'actor_id' => (string)$global_user_response['response'][0]['a_id'],
+                                                                'gateway_id' => (string)$gateway_id,
+                                                            ]);
+                                                            if (!$transitioned) {
+                                                                echo json_encode(['status' => "false", 'title' => 'Invalid State', 'message' => 'Transaction state transition is not allowed.']);
+                                                                exit();
+                                                            }
 
                                                             $params = [ ':ref' => $transaction_id, ':status' => 'pending' ];
 

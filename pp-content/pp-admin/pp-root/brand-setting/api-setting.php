@@ -13,6 +13,11 @@
         http_response_code(403);
         exit('Access denied. You need permission to perform this action. Please contact the admin.');
     }
+
+    $canEditApiSettings = hasPermission(json_decode($global_response_permission['response'][0]['permission'], true), 'api_settings', 'edit', $global_user_response['response'][0]['role']);
+    $invoiceWebhookSecurity = pp_get_invoice_webhook_security_config((string)$global_response_brand['response'][0]['brand_id']);
+    $invoiceWebhookSecretConfigured = trim((string)$invoiceWebhookSecurity['secret']) !== '';
+    $invoiceWebhookSecretForUi = $canEditApiSettings ? (string)$invoiceWebhookSecurity['secret'] : '';
 ?>
 
 <style>
@@ -145,6 +150,9 @@
                                 <button class="btn btn-danger bulk-action d-none" data-bs-toggle="modal" data-bs-target="#model-bulkAction"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-square"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14" /></svg> <span id="bulkActionBTN-count">(0)</span></button>
                             </div>
                         </div>
+                        <div class="mt-2">
+                            <small class="text-secondary">Security note: API keys are sensitive credentials. Only share with trusted backend services.</small>
+                        </div>
                   </div>
                   <div class="table-responsive">
                     <table class="table table-selectable card-table table-vcenter text-nowrap datatable">
@@ -173,6 +181,128 @@
                       </div>
                     </div>
                   </div>
+                </div>
+            </div>
+
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Invoice Webhook Security</h3>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-secondary mb-3">Configure HMAC signature validation for invoice webhooks. Use the same secret in your receiver service.</p>
+
+                        <div class="row g-3">
+                            <div class="col-lg-8">
+                                <label class="form-label">Invoice Webhook Secret</label>
+                                <div class="input-group">
+                                    <input
+                                        type="password"
+                                        id="invoiceWebhookSecret"
+                                        class="form-control"
+                                        placeholder="<?= $canEditApiSettings ? 'Set a strong secret' : 'Hidden (edit permission required)' ?>"
+                                        autocomplete="new-password"
+                                        value="<?= htmlspecialchars($invoiceWebhookSecretForUi, ENT_QUOTES, 'UTF-8') ?>"
+                                        <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                    >
+
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary"
+                                        id="invoiceWebhookSecretToggleBtn"
+                                        onclick="toggleInvoiceWebhookSecretVisibility()"
+                                        <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                    >
+                                        Show
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary"
+                                        onclick="copyInvoiceWebhookSecret()"
+                                        <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                    >
+                                        Copy
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary <?= $canEditApiSettings ? '' : 'disabled' ?>"
+                                        onclick="generateInvoiceWebhookSecret()"
+                                        <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                    >
+                                        Generate
+                                    </button>
+                                </div>
+                                <small class="form-hint">Recommended length: 32+ characters. Current status: <?= $invoiceWebhookSecretConfigured ? 'configured' : 'not configured' ?>.</small>
+                            </div>
+
+                            <div class="col-lg-4">
+                                <label class="form-label">Signature Required</label>
+                                <label class="form-check form-switch m-0 mt-2">
+                                    <input
+                                        class="form-check-input"
+                                        type="checkbox"
+                                        id="invoiceWebhookSignatureRequired"
+                                        <?= !empty($invoiceWebhookSecurity['signature_required']) ? 'checked' : '' ?>
+                                        <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                    >
+                                    <span class="form-check-label">Require `X-PIPRAPAY-SIGNATURE` header verification</span>
+                                </label>
+                            </div>
+
+                            <div class="col-lg-4">
+                                <label class="form-label">Enforce Timestamp</label>
+                                <label class="form-check form-switch m-0 mt-2">
+                                    <input
+                                        class="form-check-input"
+                                        type="checkbox"
+                                        id="invoiceWebhookTimestampRequired"
+                                        <?= !empty($invoiceWebhookSecurity['timestamp_required']) ? 'checked' : '' ?>
+                                        <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                    >
+                                    <span class="form-check-label">Require timestamp freshness checks</span>
+                                </label>
+                            </div>
+
+                            <div class="col-lg-4">
+                                <label class="form-label">Max Age (seconds)</label>
+                                <input
+                                    type="number"
+                                    min="30"
+                                    max="86400"
+                                    id="invoiceWebhookMaxAgeSeconds"
+                                    class="form-control"
+                                    value="<?= (int)$invoiceWebhookSecurity['max_age_seconds'] ?>"
+                                    <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                >
+                                <small class="form-hint">Accepted range: 30 to 86400 seconds.</small>
+                            </div>
+
+                            <div class="col-lg-4">
+                                <label class="form-label">Clock Skew (seconds)</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="900"
+                                    id="invoiceWebhookClockSkewSeconds"
+                                    class="form-control"
+                                    value="<?= (int)$invoiceWebhookSecurity['clock_skew_seconds'] ?>"
+                                    <?= $canEditApiSettings ? '' : 'disabled' ?>
+                                >
+                                <small class="form-hint">Accepted range: 0 to 900 seconds.</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-footer d-flex justify-content-end">
+                        <button
+                            type="button"
+                            class="btn btn-primary save-invoice-webhook-security-btn <?= $canEditApiSettings ? '' : 'disabled' ?>"
+                            <?= $canEditApiSettings ? '' : 'disabled' ?>
+                        >
+                            Save Webhook Security
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -485,12 +615,152 @@
         </div>
     </div>
 </div>
+
 <!--extra requirement-->
 <!--extra requirement-->
 <!--extra requirement-->
 
 
 <script data-cfasync="false">
+    function writeTextToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text);
+        }
+
+        return new Promise(function (resolve, reject) {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = text;
+            input.setAttribute('readonly', 'readonly');
+            input.style.position = 'fixed';
+            input.style.opacity = '0';
+            document.body.appendChild(input);
+            input.select();
+            input.setSelectionRange(0, text.length);
+
+            try {
+                const copied = document.execCommand('copy');
+                document.body.removeChild(input);
+                if (copied) {
+                    resolve();
+                    return;
+                }
+                reject(new Error('copy_failed'));
+            } catch (e) {
+                document.body.removeChild(input);
+                reject(e);
+            }
+        });
+    }
+
+    function toggleInvoiceWebhookSecretVisibility() {
+        const secretInput = document.getElementById('invoiceWebhookSecret');
+        const toggleBtn = document.getElementById('invoiceWebhookSecretToggleBtn');
+        if (!secretInput || !toggleBtn) {
+            return;
+        }
+
+        if (secretInput.type === 'password') {
+            secretInput.type = 'text';
+            toggleBtn.innerText = 'Hide';
+        } else {
+            secretInput.type = 'password';
+            toggleBtn.innerText = 'Show';
+        }
+    }
+
+    function generateInvoiceWebhookSecret() {
+        const secretInput = document.getElementById('invoiceWebhookSecret');
+        if (!secretInput || secretInput.disabled) {
+            return;
+        }
+
+        const bytes = new Uint8Array(32);
+        if (window.crypto && window.crypto.getRandomValues) {
+            window.crypto.getRandomValues(bytes);
+        } else {
+            for (let i = 0; i < bytes.length; i++) {
+                bytes[i] = Math.floor(Math.random() * 256);
+            }
+        }
+        const generated = Array.from(bytes).map(function (byte) {
+            return byte.toString(16).padStart(2, '0');
+        }).join('');
+        secretInput.value = generated;
+        secretInput.type = 'text';
+        document.getElementById('invoiceWebhookSecretToggleBtn').innerText = 'Hide';
+
+        createToast({
+            title: 'Secret Generated',
+            description: 'A new webhook secret has been generated. Save settings to apply it.',
+            svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5f38f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-circle-check"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M9 12l2 2l4 -4" /></svg>`,
+            timeout: 5000,
+            top: 70
+        });
+    }
+
+    function copyInvoiceWebhookSecret() {
+        const secretInput = document.getElementById('invoiceWebhookSecret');
+        if (!secretInput) {
+            return;
+        }
+
+        const secret = (secretInput.value || '').trim();
+        if (secret === '') {
+            createToast({
+                title: 'Secret Missing',
+                description: 'Webhook secret is empty.',
+                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                timeout: 5000,
+                top: 70
+            });
+            return;
+        }
+
+        writeTextToClipboard(secret).then(function () {
+            createToast({
+                title: 'Copied',
+                description: 'Webhook secret copied successfully.',
+                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5f38f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-circle-check"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M9 12l2 2l4 -4" /></svg>`,
+                timeout: 5000,
+                top: 70
+            });
+        }).catch(function () {
+            secretInput.focus();
+            secretInput.select();
+            createToast({
+                title: 'Copy Failed',
+                description: 'Clipboard permission blocked. Select and copy the secret manually.',
+                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                timeout: 6000,
+                top: 70
+            });
+        });
+    }
+
+    function toggleApiKeyVisibility(fieldId, btnEl) {
+        const field = document.getElementById(fieldId);
+        if (!field || !btnEl) {
+            return;
+        }
+
+        if (field.type === 'password') {
+            field.type = 'text';
+            btnEl.innerText = 'Hide';
+        } else {
+            field.type = 'password';
+            btnEl.innerText = 'Show';
+        }
+    }
+
+    function copyApiKeyField(fieldId) {
+        const field = document.getElementById(fieldId);
+        if (!field) {
+            return;
+        }
+        copyContent(field.value, 'Copied!', 'Api Key copied successfully.');
+    }
+
     $('.model-bulkAction-btn').click(function () {
         var my_action_confirmation_btn = document.querySelector("#my-action-confirmation-btn").value;
         var actionID = document.querySelector("#model-bulkActionID").value;
@@ -724,9 +994,10 @@
                                 <td><input class="form-check-input m-0 align-middle table-selectable-check rowCheckbox" type="checkbox" aria-label="Select invoice"></td>
                                 <td ${redirectEdit}>${item.name}</td>
                                 <td>
-                                    <div class="input-group" style=" max-width: 250px; min-width: 250px; ">
-                                       <input type="text" value="${item.api_key}" class="form-control" readonly>
-                                       <button class="btn btn-icon" type="button" onclick="copyContent('${item.api_key}', 'Copied!', 'Api Key copied successfully.')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg></button>
+                                    <div class="input-group" style=" max-width: 290px; min-width: 290px; ">
+                                       <input id="api-key-field-${item.id}" type="password" value="${item.api_key}" class="form-control" readonly>
+                                       <button class="btn btn-outline-secondary" type="button" onclick="toggleApiKeyVisibility('api-key-field-${item.id}', this)">Show</button>
+                                       <button class="btn btn-icon" type="button" onclick="copyApiKeyField('api-key-field-${item.id}')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-copy"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" /><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" /></svg></button>
                                     </div>
                                 </td>
                                 <td ${redirectEdit}>${item.created_date}</td>
@@ -941,7 +1212,7 @@
                     const modal = document.getElementById("modal-createItem");
 
                     // Reset text inputs
-                    modal.querySelectorAll('input[type="text"]').forEach(input => input.value = '');
+                    modal.querySelectorAll('input[type="text"], input[type="date"]').forEach(input => input.value = '');
 
                     // Reset radios to first option
                     const radios = modal.querySelectorAll('input[name="api-status"]');
@@ -1077,6 +1348,130 @@
                 }
             });
         }
+    });
+
+    $('.save-invoice-webhook-security-btn').click(function () {
+        if ($(this).hasClass('disabled')) {
+            return;
+        }
+
+        const csrf_token_default = $('input[name="csrf_token_default"]').val();
+        const secret = ($('#invoiceWebhookSecret').val() || '').trim();
+        const signatureRequired = $('#invoiceWebhookSignatureRequired').is(':checked') ? 1 : 0;
+        const timestampRequired = $('#invoiceWebhookTimestampRequired').is(':checked') ? 1 : 0;
+        const maxAgeRaw = ($('#invoiceWebhookMaxAgeSeconds').val() || '').toString().trim();
+        const clockSkewRaw = ($('#invoiceWebhookClockSkewSeconds').val() || '').toString().trim();
+
+        const maxAge = parseInt(maxAgeRaw, 10);
+        const clockSkew = parseInt(clockSkewRaw, 10);
+
+        if (signatureRequired === 1 && secret === '') {
+            createToast({
+                title: 'Secret Required',
+                description: 'Set `invoice-webhook-secret` when signature verification is enabled.',
+                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                timeout: 6000,
+                top: 70
+            });
+            return;
+        }
+
+        if (secret !== '' && secret.length < 16) {
+            createToast({
+                title: 'Weak Secret',
+                description: 'Webhook secret must be at least 16 characters.',
+                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                timeout: 6000,
+                top: 70
+            });
+            return;
+        }
+
+        if (!Number.isInteger(maxAge) || maxAge < 30 || maxAge > 86400) {
+            createToast({
+                title: 'Invalid Max Age',
+                description: 'Max age must be between 30 and 86400 seconds.',
+                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                timeout: 6000,
+                top: 70
+            });
+            return;
+        }
+
+        if (!Number.isInteger(clockSkew) || clockSkew < 0 || clockSkew > 900) {
+            createToast({
+                title: 'Invalid Clock Skew',
+                description: 'Clock skew must be between 0 and 900 seconds.',
+                svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                timeout: 6000,
+                top: 70
+            });
+            return;
+        }
+
+        const btnClass = 'save-invoice-webhook-security-btn';
+        const btn = document.querySelector('.' + btnClass).innerHTML;
+        document.querySelector('.' + btnClass).innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div>';
+
+        $.ajax({
+            type: 'POST',
+            url: '<?php echo $site_url.$path_admin ?>/dashboard',
+            data: {
+                action: "invoice-webhook-security-save",
+                csrf_token: csrf_token_default,
+                secret: secret,
+                signature_required: signatureRequired,
+                timestamp_required: timestampRequired,
+                max_age_seconds: maxAge,
+                clock_skew_seconds: clockSkew
+            },
+            dataType: 'json',
+            success: function (response) {
+                document.querySelector('.' + btnClass).innerHTML = btn;
+
+                document.querySelectorAll('input[name="csrf_token"]').forEach(input => {
+                    input.value = response.csrf_token;
+                });
+                document.querySelectorAll('input[name="csrf_token_default"]').forEach(input => {
+                    input.value = response.csrf_token;
+                });
+
+                if (response.status === 'true') {
+                    if (response.config) {
+                        $('#invoiceWebhookSignatureRequired').prop('checked', !!parseInt(response.config.signature_required, 10));
+                        $('#invoiceWebhookTimestampRequired').prop('checked', !!parseInt(response.config.timestamp_required, 10));
+                        $('#invoiceWebhookMaxAgeSeconds').val(response.config.max_age_seconds);
+                        $('#invoiceWebhookClockSkewSeconds').val(response.config.clock_skew_seconds);
+                    }
+
+                    createToast({
+                        title: response.title,
+                        description: response.message,
+                        svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5f38f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-circle-check"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M9 12l2 2l4 -4" /></svg>`,
+                        timeout: 6000,
+                        top: 70
+                    });
+                } else {
+                    createToast({
+                        title: response.title,
+                        description: response.message,
+                        svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                        timeout: 6000,
+                        top: 70
+                    });
+                }
+            },
+            error: function () {
+                document.querySelector('.' + btnClass).innerHTML = btn;
+                createToast({
+                    title: 'Something Wrong!',
+                    description: 'For further assistance, please contact our support team.',
+                    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d63939" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-exclamation-circle"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 9v4" /><path d="M12 16v.01" /></svg>`,
+                    timeout: 6000,
+                    top: 70
+                });
+            }
+        });
     });
     
     //extra requirement 
