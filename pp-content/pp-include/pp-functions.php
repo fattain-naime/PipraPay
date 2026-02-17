@@ -259,6 +259,14 @@
 
             $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            foreach ($data as &$row) {
+                foreach ($row as $col => $val) {
+                    if (is_null($val)) {
+                        $row[$col] = '--';
+                    }
+                }
+            }
+
             if ($data) {
                 return json_encode(['status' => true, 'response' => $data]);
             } else {
@@ -272,57 +280,78 @@
     }
 
     function insertData($tableName, $columns, $values) {
-        $pdo = connectDatabase(); // PDO connection
-
-        // Build column placeholders like :col0, :col1, ...
-        $placeholders = [];
-        foreach ($columns as $index => $col) {
-            $placeholders[] = ":val$index";
-        }
-
-        $columnsString = implode(", ", $columns);
-        $placeholdersString = implode(", ", $placeholders);
-
-        $sql = "INSERT INTO `$tableName` ($columnsString) VALUES ($placeholdersString)";
+        $pdo = connectDatabase(); 
 
         try {
-            $stmt = $pdo->prepare($sql);
+            $stmtColumns = $pdo->prepare("SHOW COLUMNS FROM `$tableName`");
+            $stmtColumns->execute();
+            $tableCols = $stmtColumns->fetchAll(PDO::FETCH_ASSOC);
 
-            // Bind values to placeholders
-            foreach ($values as $index => $value) {
-                $stmt->bindValue(":val$index", $value);
+            $finalColumns = [];
+            $finalValues = [];
+            $placeholders = [];
+
+            $userData = array_combine($columns, $values);
+
+            foreach ($tableCols as $col) {
+                $colName = $col['Field'];
+
+                if (strpos(strtolower($col['Extra']), 'auto_increment') !== false && !isset($userData[$colName])) {
+                    continue;
+                }
+
+                $finalColumns[] = $colName;
+                $placeholders[] = ":val_$colName";
+
+                if (isset($userData[$colName])) {
+                    $finalValues[$colName] = $userData[$colName];
+                } else {
+                    if ($col['Default'] !== null) {
+                        $finalValues[$colName] = $col['Default'];
+                    } else {
+                        $finalValues[$colName] = "--";
+                    }
+                }
             }
 
-            return $stmt->execute(); // returns true/false
+            $sql = "INSERT INTO `$tableName` (" . implode(", ", $finalColumns) . ") VALUES (" . implode(", ", $placeholders) . ")";
+            $stmt = $pdo->prepare($sql);
+
+            foreach ($finalValues as $colName => $val) {
+                $stmt->bindValue(":val_$colName", $val);
+            }
+
+            return $stmt->execute();
+
         } catch (PDOException $e) {
-            // Optional: log error instead of showing to user
             error_log("Insert failed: " . $e->getMessage());
             return false;
         }
     }
 
     function updateData($tableName, $columns, $values, $condition) {
-        $pdo = connectDatabase(); // PDO connection
+        $pdo = connectDatabase(); 
 
-        // Build SET clause with placeholders
         $setClauses = [];
         foreach ($columns as $index => $col) {
             $setClauses[] = "$col = :val$index";
         }
         $setString = implode(", ", $setClauses);
 
-        // Build SQL
         $sql = "UPDATE `$tableName` SET $setString WHERE $condition";
 
         try {
             $stmt = $pdo->prepare($sql);
 
-            // Bind column values
             foreach ($values as $index => $value) {
+                if ($value === "" || is_null($value)) {
+                    $value = "--";
+                }
+
                 $stmt->bindValue(":val$index", $value);
             }
 
-            return $stmt->execute(); // returns true/false
+            return $stmt->execute(); 
         } catch (PDOException $e) {
             error_log("updateData PDO Error: " . $e->getMessage());
             return false;
