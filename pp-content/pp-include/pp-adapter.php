@@ -5219,13 +5219,16 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                 $rawApiKey = bin2hex(random_bytes(25));
                                 $scopes_json = json_encode($scopes, JSON_UNESCAPED_UNICODE);
                                 $nowDate = getCurrentDatetime('Y-m-d H:i:s');
+                                $dbPrefixString = (string)$db_prefix;
+                                $apiTable = $dbPrefixString . 'api';
+                                $apiKeysTable = $dbPrefixString . 'api_keys';
 
                                 $pdo = connectDatabase();
                                 try {
                                     $pdo->beginTransaction();
 
                                     $stmt = $pdo->prepare(
-                                        "INSERT INTO `{$db_prefix}api` (brand_id, name, api_key, expired_date, status, api_scopes, created_date, updated_date, created_at, updated_at)
+                                        "INSERT INTO `{$apiTable}` (brand_id, name, api_key, expired_date, status, api_scopes, created_date, updated_date, created_at, updated_at)
                                          VALUES (:brand_id, :name, :api_key, :expired_date, :status, :api_scopes, :created_date, :updated_date, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))"
                                     );
                                     $stmt->execute([
@@ -5240,16 +5243,25 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                     ]);
 
                                     $apiId = (int)$pdo->lastInsertId();
-                                    $apiKeyRepo = new ApiKeyRepository($pdo);
-                                    $apiKeyRepo->createHashedKey(
-                                        $apiId,
-                                        $global_response_brand['response'][0]['brand_id'],
-                                        $api_name,
-                                        $rawApiKey,
-                                        is_array($scopes) ? $scopes : [],
-                                        pp_parse_expired_date_to_datetime($apiExpiryDate),
-                                        $api_status
+                                    $hashedInsertStmt = $pdo->prepare(
+                                        "INSERT INTO `{$apiKeysTable}` (
+                                            api_id, brand_id, name, key_hash, key_prefix,
+                                            scopes, status, expired_at, created_at, updated_at
+                                        ) VALUES (
+                                            :api_id, :brand_id, :name, :key_hash, :key_prefix,
+                                            :scopes, :status, :expired_at, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+                                        )"
                                     );
+                                    $hashedInsertStmt->execute([
+                                        ':api_id' => $apiId,
+                                        ':brand_id' => (string)$global_response_brand['response'][0]['brand_id'],
+                                        ':name' => $api_name,
+                                        ':key_hash' => hash('sha256', $rawApiKey),
+                                        ':key_prefix' => substr($rawApiKey, 0, 8),
+                                        ':scopes' => json_encode(array_values(is_array($scopes) ? $scopes : []), JSON_UNESCAPED_UNICODE),
+                                        ':status' => ($api_status === 'inactive') ? 'inactive' : 'active',
+                                        ':expired_at' => pp_parse_expired_date_to_datetime($apiExpiryDate),
+                                    ]);
 
                                     $pdo->commit();
                                 } catch (Throwable $e) {
@@ -5466,6 +5478,8 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                         $actionID = escape_string($_POST['actionID'] ?? '');
                         $selected_ids_json = $_POST['selected_ids'] ?? '[]';
                         $selected_ids = json_decode($selected_ids_json, true);
+                        $dbPrefixString = (string)$db_prefix;
+                        $apiKeysTable = $dbPrefixString . 'api_keys';
                         $deletedCount = 0;
                         $deletedHashRows = 0;
                         $deleteFailures = [];
@@ -5530,7 +5544,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             updateData($db_prefix.'api', $columns, $values, $condition);
                                             try {
                                                 $pdo = connectDatabase();
-                                                $stmt = $pdo->prepare("UPDATE `{$db_prefix}api_keys` SET status = 'active', updated_at = UTC_TIMESTAMP(6) WHERE api_id = :api_id");
+                                                $stmt = $pdo->prepare("UPDATE `{$apiKeysTable}` SET status = 'active', updated_at = UTC_TIMESTAMP(6) WHERE api_id = :api_id");
                                                 $stmt->execute([':api_id' => (int)$itemID]);
                                             } catch (Throwable $e) {
                                                 error_log('api key status sync failed: ' . $e->getMessage());
@@ -5549,7 +5563,7 @@ aa021689e729dc2302b47e9bdc7d1a9f8b72f95f01530da35bf3b848b188d5b1
                                             updateData($db_prefix.'api', $columns, $values, $condition);
                                             try {
                                                 $pdo = connectDatabase();
-                                                $stmt = $pdo->prepare("UPDATE `{$db_prefix}api_keys` SET status = 'inactive', updated_at = UTC_TIMESTAMP(6) WHERE api_id = :api_id");
+                                                $stmt = $pdo->prepare("UPDATE `{$apiKeysTable}` SET status = 'inactive', updated_at = UTC_TIMESTAMP(6) WHERE api_id = :api_id");
                                                 $stmt->execute([':api_id' => (int)$itemID]);
                                             } catch (Throwable $e) {
                                                 error_log('api key status sync failed: ' . $e->getMessage());
