@@ -1,6 +1,6 @@
 # [PipraPay](https://piprapay.com) — Payment Automation Platform
 
-PipraPay is a self-hosted, open-source payment automation platform by QubePlug Bangladesh.  
+PipraPay is a self-hosted, open-source payment automation platform by QubePlug.  
 Deploy it on your own server, customize your workflow, install plugins and themes, and stay fully in control — with no monthly fees.  
 Visit https://piprapay.com/ for more information.
 
@@ -69,7 +69,7 @@ Official Open-Source Repository:
 
 ## 🛡️ Trademark Policy
 
-The PipraPay name, logo, and brand identity are trademarks of QubePlug Bangladesh.
+The PipraPay name, logo, and brand identity are trademarks of QubePlug.
 
 ### ✅ Allowed
 - Use PipraPay with original branding  
