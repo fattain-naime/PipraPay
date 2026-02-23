@@ -1,6 +1,6 @@
 # PipraPay Trademark Policy
 
-The PipraPay name, logo, and overall brand identity are trademarks of QubePlug Bangladesh.
+The PipraPay name, logo, and overall brand identity are trademarks of QubePlug.
 
 ## What you CAN do
 - Use the PipraPay software under the AGPL v3 license.
