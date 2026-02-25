@@ -15,14 +15,14 @@ Official Open-Source Repository:
 
 ## 📖 Documentation
 
-- Developer guides live in `docs/`:
-  - Payment Gateway Plugins: [docs/Payment-Gateway-Plugins-Developer-Guide.md](docs/Payment-Gateway-Plugins-Developer-Guide.md)
-  - Module Plugins: [docs/PipraPay-Module-Plugin-Developer-Guide.md](docs/PipraPay-Module-Plugin-Developer-Guide.md)
+- Developer guides live in `https://help.piprapay.com`:
+  - Payment Gateway Plugins: [https://help.piprapay.com/hc/categories/28/29/gateway-development](https://help.piprapay.com/hc/categories/28/29/gateway-development)
+  - Module Plugins: **Coming soon**
 
 - PipraPay Plugins & Integrations Directory
   - Plugin Directory: [docs/Plugin-Directory.md](docs/Plugin-Directory.md)
 
-- Browse all docs: [[docs/](https://piprapay.readme.io/)]([docs/](https://piprapay.readme.io/))
+- Browse all docs: [https://help.piprapay.com](https://help.piprapay.com/)
 - API docs: https://piprapay.readme.io
 - Explore PipraPay Demo: https://demo.piprapay.com/admin/login  
   - username: `demo`  
@@ -95,6 +95,7 @@ We welcome community contributions:
 
 ## 🤷‍♂️ Community & Support
 
-- Website: https://piprapay.com/
-- Documentation: [docs/](https://piprapay.readme.io/)
-- Issues & Bug Reports: https://github.com/PipraPay/PipraPay/issues
+- Website: [https://piprapay.com](https://piprapay.com/)
+- Documentation: [docs/](https://help.piprapay.com)
+- API Documentation: [docs/](https://piprapay.readme.io/)
+- Issues & Bug Reports: [https://github.com/PipraPay/PipraPay/issues](https://github.com/PipraPay/PipraPay/issues)
